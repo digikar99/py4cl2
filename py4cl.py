@@ -436,21 +436,33 @@ def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
 	return str(value)[1:].replace("-", "_")
 
-def message_dispatch_loop():
+def message_dispatch_loop ():
+	while True:
+		try_process_message(blocking=True)
+
+def try_process_message(blocking=True):
 	"""
 	Wait for a message, dispatch on the type of message.
 	Message types are determined by the first character:
 
 	e  Evaluate an expression (expects string)
 	x  Execute a statement (expects string)
+	O  Enable handles
+	o  Disable handles
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
 	while True:
 		try:
 			output_stream.flush()
+			if not blocking:
+				os.set_blocking(sys.stdin.fileno(), False)
 			# Read command type
 			cmd_type = sys.stdin.read(1)
+			if cmd_type == "":
+				if not blocking:
+					os.set_blocking(sys.stdin.fileno(), True)
+				return None
 			# It is possible that python would have finished sending the data to CL
 			# but CL would still not have finished processing. We will receive further
 			# instructions only after CL has finished processing, and therefore we can delete
@@ -488,6 +500,8 @@ def message_dispatch_loop():
 python_objects = {}
 python_handle = itertools.count(0)
 
+# For user to use to give time to our dispatch loop
+eval_globals["try_process_message"] = try_process_message
 # Make callback function accessible to evaluation
 eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol
