@@ -124,6 +124,18 @@ Passes strings as they are, without any 'pythonize'ation."
       ;; wait for python output
       (dispatch-messages *python*))))
 
+(defun raw-py-exec/no-return (&rest strings)
+  "Execute strings without expecting any return, used to pass
+control permanently to, say, a GUI main loop in the python process.
+Passes strings as they are, without any 'pythonize'ation."
+  (python-start-if-not-alive)
+  (let ((stream (uiop:process-info-input *python*))
+        (str (apply #'concatenate 'string strings)))
+    (bt:with-recursive-lock-held (*python-lock*) ; wait for previous processing to be done
+      (write-char #\x stream)
+      (stream-write-string str stream)
+      (force-output stream))))
+
 (declaim (ftype (function (&rest string)) raw-pyeval))
 (defun raw-pyeval (&rest strings)
   "Calls python eval on the concatenation of strings, as they are, without any
