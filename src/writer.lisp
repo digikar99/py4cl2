@@ -6,14 +6,16 @@
 ;;;
 ;;; Object Handles
 
+;; This is not thread-safe
 (defvar *handle-counter* 0)
 
 (defvar *lisp-objects* (make-hash-table :test #'eql))
 
-(defun clear-lisp-objects ()
+(defun clear-lisp-objects (python)
   "Clear the *lisp-objects* object store, allowing them to be GC'd"
-  (setf *lisp-objects* (make-hash-table :test #'eql)
-        *handle-counter* 0))
+  (loop for handle = (pop (python-lisp-objects python))
+	while handle
+	do (remhash handle *lisp-objects*)))
 
 (defun free-handle (handle)
   "Remove an object with HANDLE from the hash table"
