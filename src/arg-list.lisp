@@ -121,23 +121,20 @@
                (parameter-empty-p  (raw-pyeval "tuple(map(lambda p: p.default == inspect._empty, "
                                                (%pythonize parameters) "))"))
                rest keyword-rest)
+
+          (setq parameters         (ensure-tuple->list parameters)
+                parameter-kinds    (ensure-tuple->list parameter-kinds)
+                parameter-names    (ensure-tuple->list parameter-names)
+                parameter-defaults (ensure-tuple->list parameter-defaults)
+                parameter-empty-p  (ensure-tuple->list parameter-empty-p))
+          (loop :for default :in parameter-defaults
+                ;; Needs that True translates to T; False translates to NIL
+                :if (and (typep default 'python-object)
+                         (not (raw-pyeval "inspect._empty == " (%pythonize default))))
+                  :do (signal 'default-is-python-object))
           
           (iter
-            
-            (initially
 
-             (setq parameters         (ensure-tuple->list parameters)
-                   parameter-kinds    (ensure-tuple->list parameter-kinds)
-                   parameter-names    (ensure-tuple->list parameter-names)
-                   parameter-defaults (ensure-tuple->list parameter-defaults)
-                   parameter-empty-p  (ensure-tuple->list parameter-empty-p))
-             
-             (loop :for default :in parameter-defaults
-                   ;; Needs that True translates to T; False translates to NIL
-                   :if (and (typep default 'python-object)
-                            (not (raw-pyeval "inspect._empty == " (%pythonize default))))
-                     :do (signal 'default-is-python-object)))
-            
             (for kind      in parameter-kinds)
             (for name      in parameter-names)
             (for empty-p   in parameter-empty-p)
