@@ -100,10 +100,6 @@ which is interpreted correctly by python (3.7.2)."
                (write-to-string (imagpart obj))
                "j)"))
 
-(defvar *numpy-pickle-index* 0
-  "Used for transferring multiple numpy-pickled arrays in one pyeval/exec/etc")
-;; this is incremented by pythonize and reset to 0 at the beginning of
-;; every pyeval*/pycall from delete-numpy-pickle-arrays in reader.lisp
 (defmethod pythonize ((obj array))
   (when (and *warn-on-unavailable-feature-usage*
              (not (member :arrays *internal-features*))
@@ -137,8 +133,9 @@ Is numpy installed on python side?"
       (cond ((member :fast-large-array-transfer *internal-features*)
              (let ((filename (concatenate 'string
                                           (config-var 'numpy-pickle-location)
-                                          ".to." (write-to-string *numpy-pickle-index*))))
-               (incf *numpy-pickle-index*)
+					  "-" (write-to-string (python-id *python*))
+                                          ".to." (write-to-string (python-numpy-pickle-index *python*)))))
+               (incf (python-numpy-pickle-index *python*))
                (numpy-file-format:store-array obj filename)
                (return-from pythonize
                  (concatenate 'string "_py4cl_load_pickled_ndarray('"

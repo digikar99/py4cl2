@@ -36,6 +36,9 @@
   (id (incf *python-id*) :type fixnum) ;; unique id
   (freed-python-objects nil :type list) ;; lisp objects that have been gc'ed, free them from python
   (numpy-pickle-index 0 :type fixnum)
+  ;; "Used for transferring multiple numpy-pickled arrays in one pyeval/exec/etc")
+  ;; this is incremented by pythonize and reset to 0 at the beginning of
+  ;; every pyeval*/pycall from delete-numpy-pickle-arrays in reader.lisp
   (lisp-objects nil :type list) ;; lisp objects that python might know about
   (numpy-installed nil :type boolean)
   (thread-end-signal nil :type boolean) ;; t to gently stop threads
