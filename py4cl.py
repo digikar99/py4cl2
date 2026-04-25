@@ -18,6 +18,7 @@ import os
 import signal
 import traceback
 import threading
+import time
 
 numpy_is_installed = False
 try:
@@ -117,9 +118,7 @@ class LispCallbackObject (object):
 			finally:
 				return_values = old_return_values
 
-			# Wait for a value to be returned.
-			# Note that the lisp function may call python before returning
-			return message_dispatch_loop()
+			return try_process_message(blocking=True)
 
 
 class UnknownLispObject (object):
@@ -160,7 +159,7 @@ class UnknownLispObject (object):
 			sys.stdout = output_stream
 
 		# Wait for the result
-		return message_dispatch_loop()
+		return try_process_message(blocking=True) #message_dispatch_loop()
 
 	def __setattr__(self, attr, value):
 		if self.__during_init:
@@ -171,7 +170,7 @@ class UnknownLispObject (object):
 		finally:
 			sys.stdout = output_stream
 		# Wait until finished, to syncronise
-		return message_dispatch_loop()
+		return try_process_message(blocking=True) # message_dispatch_loop()
 
 python_to_lisp_type = {
 	bool       : "BOOLEAN",
@@ -437,20 +436,37 @@ def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	return str(value)[1:].replace("-", "_")
 
 def message_dispatch_loop():
+	while True:
+		try_process_message(blocking=True)
+
+def try_process_message(blocking=True):
 	"""
 	Wait for a message, dispatch on the type of message.
 	Message types are determined by the first character:
 
 	e  Evaluate an expression (expects string)
 	x  Execute a statement (expects string)
+	O  Enable handles
+	o  Disable handles
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
+	busy_loop = 100
 	while True:
 		try:
 			output_stream.flush()
+			if not blocking:
+				os.set_blocking(sys.stdin.fileno(), False)
 			# Read command type
 			cmd_type = sys.stdin.read(1)
+			if cmd_type == "":
+				if busy_loop > 0 and not blocking:
+					busy_loop = busy_loop - 1
+					continue;
+				if not blocking:
+					os.set_blocking(sys.stdin.fileno(), True)
+				return None
+			busy_loop = 100
 			# It is possible that python would have finished sending the data to CL
 			# but CL would still not have finished processing. We will receive further
 			# instructions only after CL has finished processing, and therefore we can delete
@@ -471,7 +487,7 @@ def message_dispatch_loop():
 			elif cmd_type == "q":
 				exit(0)
 			elif cmd_type == "r": # return value from lisp function
-				return recv_value()
+				return recv_value() # break out of the while loop
 			elif cmd_type == "O":  # Return only handles
 				return_values += 1
 			elif cmd_type == "o":  # Return values when possible (default)
@@ -488,6 +504,8 @@ def message_dispatch_loop():
 python_objects = {}
 python_handle = itertools.count(0)
 
+# For user to use to give time to our dispatch loop
+eval_globals["try_process_message"] = try_process_message
 # Make callback function accessible to evaluation
 eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol

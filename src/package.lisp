@@ -66,4 +66,5 @@
    #:py-cd)
   (:export
    #:*internal-features*
-   #:*warn-on-unavailable-feature-usage*))
+   #:*warn-on-unavailable-feature-usage*
+   #:raw-py-exec/no-return))
