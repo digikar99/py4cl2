@@ -84,16 +84,17 @@ Expects a line containing the number of chars following
 e.g. '5~%hello'
 Returns the string or nil on error
 "
-  (let ((nchars (parse-integer (read-line stream))))
-    (with-output-to-string (str)
-      (iter (for i from 1 to nchars)
-        (for char = (read-char stream))
-        (write-char char str)))))
+  (declare (optimize speed safety))
+  (let* ((nchars (parse-integer (read-line stream)))
+         (seq (make-array nchars :element-type 'character)))
+    (read-sequence seq stream)
+    seq))
 
 (defun stream-read-value (stream)
   "Get a value from a stream
 Currently works by reading a string then using read-from-string
 "
+  (declare (optimize speed safety))
   (let ((str (stream-read-string stream)))
     (multiple-value-bind (value count)
         (read-from-string str)
