@@ -19,7 +19,11 @@ HANDLE slot is a unique key used to refer to a value in python."
         (progn
           (terpri s)
           (pprint-logical-block (s nil :per-line-prefix "  ")
-            (format s "~A" (pyeval "str(" o ")")))
+            ;; Doing this prevents infinite error loops if someone tries
+            ;; to print out an object that causes an error which contains
+            ;; the object which...
+            (let ((*print-python-object* nil))
+              (format s "~A" (pyeval "str(" o ")"))))
           (terpri s))
         (with-slots (type handle) o
           (format s ":HANDLE ~A :TYPE ~A" handle type)))))
