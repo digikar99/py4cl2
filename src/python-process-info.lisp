@@ -28,14 +28,6 @@ which in turn can call PYSTART")
     :type bt:lock
     :reader python-raw-py-lock
     :documentation "This is the user facing lock through raw-py.")
-   (in-with-python-output
-    :initform nil
-    :type boolean
-    :accessor python-in-with-python-output)
-   (output-semaphore
-    :initform (bt:make-semaphore :name "python-output-semaphore")
-    :type bt:semaphore
-    :reader python-output-semaphore)
    (freed-python-objects
     :initform nil
     :type list

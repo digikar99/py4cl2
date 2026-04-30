@@ -493,6 +493,7 @@ eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol
 eval_globals["_py4cl_UnknownLispObject"] = UnknownLispObject
 eval_globals["_py4cl_objects"] = python_objects
+eval_globals["_py4cl_stdout_streams"] = []
 eval_globals["_py4cl_generator"] = generator
 # These store the environment used when eval-ing strings from Lisp
 eval_globals["_py4cl_config"] = config
