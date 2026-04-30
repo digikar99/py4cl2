@@ -108,8 +108,6 @@
                :python-process process)))))
 
 ;; ============================== RAW FUNCTIONS ================================
-(defvar *python-lock* (bt:make-recursive-lock "py4cl2"))
-
 (declaim (ftype (function (character &rest string)) raw-py))
 (defun raw-py (cmd-char &rest strings)
   "Intended as an abstraction to RAW-PYEVAL and RAW_PYEXEC.
@@ -117,7 +115,8 @@ Passes strings as they are, without any 'pythonize'ation."
   (python-start-if-not-alive)
   (let ((stream (uiop:process-info-input *python*))
         (str (apply #'concatenate 'string strings)))
-    (bt:with-recursive-lock-held (*python-lock*) ; wait for previous processing to be done
+    ;; wait for previous processing to be done
+    (bt:with-recursive-lock-held ((python-raw-py-lock *python*))
       (write-char cmd-char stream)
       (stream-write-string str stream)
       (force-output stream)

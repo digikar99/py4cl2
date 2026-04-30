@@ -12,6 +12,7 @@ Report the issues at https://github.com/digikar99/py4cl2/issues
   :depends-on ("alexandria"
                "bordeaux-threads"
                "cl-json"
+               "closer-mop"
                "float-features"
                "iterate"
                "numpy-file-format"
@@ -21,6 +22,7 @@ Report the issues at https://github.com/digikar99/py4cl2/issues
   :pathname #P"src/"
   :components ((:static-file "python-code" :pathname #P"../py4cl.py")
                (:file "package")
+               (:file "python-process-info" :depends-on ("package"))
                (:file "config"         :depends-on ("package"))
                (:file "features"       :depends-on ("package"))
                (:file "python-process" :depends-on ("package" "features"))

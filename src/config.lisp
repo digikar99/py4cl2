@@ -189,7 +189,7 @@ instructions on creating a ram-disk on linux-based systems.
       (format t "~&Call (SAVE-CONFIG) if you'd like to persist this value for PYCMD.
 You will need to (PYSTOP) and (PYSTART) to use the new binary.~%")
       (save-config))
-  (when (python-alive-p) (pycall "_py4cl_load_config")))
+  (when (python-alive-p *python*) (pycall "_py4cl_load_config")))
 
 (defun py-cd (path)
   (pyexec "import os")
