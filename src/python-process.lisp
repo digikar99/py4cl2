@@ -163,12 +163,15 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
          (while (and pyinfo (uiop:process-alive-p pyinfo)))
          (handler-case
              (loop :for char := (read-char py-out)
+                   :while (python-thread-end-signal pyinfo)
                    :do (write-char char))
            (simple-error (condition)
-             (cerror "~S~%  ~A~%occured while inside python-output-thread ~A"
-                     condition condition (bt:current-thread)))
+             (unless (python-thread-end-signal pyinfo)
+               (cerror "~S~%  ~A~%occured while inside python-output-thread ~A"
+                       condition condition (bt:current-thread))))
            (stream-error (condition)
-             (unless (member :abcl *features*)
+             (unless (or (python-thread-end-signal pyinfo)
+                         (member :abcl *features*))
                (cerror "~S~%  ~A~%occured while inside python-output-thread ~A"
                       condition condition (bt:current-thread))))))))
    :name "python-output-thread (sys.stderr)"))
@@ -217,6 +220,7 @@ If still not alive, raises a condition."
   "Stop (Quit) the python process"
   (unless (python-alive-p python)
     (return-from pystop))
+  (setf (python-thread-end-signal python) t)
   (python-subprocess-quit-or-kill python)
   ;; We no longer care about any objects that needed to be freed in python
   (setf (python-freed-python-objects python) nil)
