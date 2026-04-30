@@ -3,6 +3,9 @@
 
 (defpackage #:py4cl2
   (:use #:cl #:iterate #:alexandria)
+  (:import-from #:uiop/launch-program
+                #:process-info
+                #:process)
   (:shadowing-import-from #:iterate #:as #:for)
   (:export ; python-process
    #:python-process-startup-error
