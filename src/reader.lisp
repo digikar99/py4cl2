@@ -50,27 +50,26 @@ except:
 
 (defun delete-numpy-pickle-arrays (&optional (python *python*))
   "Delete pickled arrays, to free space."
-  (iter (while (> (python-numpy-pickle-index python) 0))
-    (decf (python-numpy-pickle-index python))
-    (for filename =
-         (concatenate 'string
-                      (config-var 'numpy-pickle-location)
-                      "-" (write-to-string (uiop:process-info-pid python))
-                      ".to." (write-to-string (python-numpy-pickle-index python))))
-    (uiop:delete-file-if-exists filename)))
+  (loop while (> (python-numpy-pickle-index python) 0)
+     do (decf (python-numpy-pickle-index python))
+        (let ((filename
+                (concatenate 'string
+                             (config-var 'numpy-pickle-location)
+                             "-" (write-to-string (uiop:process-info-pid python))
+                             ".to." (write-to-string (python-numpy-pickle-index python)))))
+          (uiop:delete-file-if-exists filename))))
 
 (defun make-python-object-finalize (&key (type "") handle (python *python*))
     "Make a PYTHON-OBJECT struct with a finalizer.
  This deletes the object from the dict store in python."
-    (tg:finalize
-     (make-python-object :type type
-                         :handle handle)
+  (tg:finalize
+     (make-python-object :type type :handle handle)
      (let ((python-id (uiop:process-info-pid python)))
        (lambda () ; This function is called when the python-object is garbage collected
          (ignore-errors
            ;; Put on a list to free later. Garbage collection may happen
            ;; in parallel with the main thread, which may be executing other commands.
-           (free-python-object python-id handle python))))))
+          (free-python-object python-id handle python))))))
 
 (defun stream-read-string (stream)
   "Reads a string from a stream
