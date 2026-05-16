@@ -31,20 +31,20 @@
    #:pyeval
    #:pyexec
    #:pycall
-   #:pymethod 
-   #:pygenerator 
-   #:pyslot-value 
+   #:pymethod
+   #:pygenerator
+   #:pyslot-value
    #:pyversion-info
-   #:pyhelp 
+   #:pyhelp
    #:chain
    #:chain*
    #:@
    #:with-remote-objects
    #:with-remote-objects*)
   (:export ; import-export
-   #:pymethod-list 
-   #:pyslot-list 
-   #:defpyfun  
+   #:pymethod-list
+   #:pyslot-list
+   #:defpyfun
    #:defpymodule
    #:*defpymodule-silent-p*
    #:defpyfuns
@@ -52,7 +52,7 @@
   (:export ; lisp-classes
    #:python-getattr
    #:python-setattr)
-  (:export ; config 
+  (:export ; config
    #:*config*
    #:*lispifiers*
    #:with-lispifiers
