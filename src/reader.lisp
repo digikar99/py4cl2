@@ -19,26 +19,28 @@ HANDLE slot is a unique key used to refer to a value in python."
         (progn
           (terpri s)
           (pprint-logical-block (s nil :per-line-prefix "  ")
-            (format s "~A" (pyeval "str(" o ")")))
+            ;; Doing this prevents infinite error loops if someone tries
+            ;; to print out an object that causes an error which contains
+            ;; the object which...
+            (let ((*print-python-object* nil))
+              (format s "~A" (pyeval "str(" o ")"))))
           (terpri s))
         (with-slots (type handle) o
           (format s ":HANDLE ~A :TYPE ~A" handle type)))))
 
-(defvar *freed-python-objects* nil
-  "A list of handles to be freed. This is used because garbage collection may occur in parallel with the main thread.")
+(defun free-python-object (python-id handle &optional (python *python*))
+  (push (list python-id handle) (python-freed-python-objects python)))
 
-(defun free-python-object (python-id handle)
-  (push (list python-id handle) *freed-python-objects*))
-
-(defun delete-freed-python-objects ()
+(defun delete-freed-python-objects (&optional (python *python*))
   ;; Remove (python-id handle) pairs from the list and process
-  (loop for id-handle = (pop *freed-python-objects*)
+  (loop for id-handle = (pop (python-freed-python-objects python))
      while id-handle
      do (let ((python-id (first id-handle))
               (handle (second id-handle)))
+          ;; Don't bother if python dead or we restarted it
           (if (and
-               (python-alive-p) ; If not alive, pyexec will start python
-               (= *current-python-process-id* python-id))  ; Python might have restarted
+                (python-alive-p python) ; If not alive, pyexec will start python
+                (= python-id (uiop:process-info-pid python)))  ; Python might have restarted
               ;; Call the internal function, to avoid infinite recursion or deadlock
               (raw-pyexec "
 try:
@@ -46,33 +48,28 @@ try:
 except:
   pass")))))
 
-(defvar *numpy-pickle-index*)
-
-(defun delete-numpy-pickle-arrays ()
+(defun delete-numpy-pickle-arrays (&optional (python *python*))
   "Delete pickled arrays, to free space."
-  (iter (while (> *numpy-pickle-index* 0))
-    (decf *numpy-pickle-index*)
-    (for filename =
-         (concatenate 'string
-                      (config-var 'numpy-pickle-location)
-                      ".to." (write-to-string *numpy-pickle-index*)))
-    (uiop:delete-file-if-exists filename)))
+  (loop while (> (python-numpy-pickle-index python) 0)
+     do (decf (python-numpy-pickle-index python))
+        (let ((filename
+                (concatenate 'string
+                             (config-var 'numpy-pickle-location)
+                             "-" (write-to-string (uiop:process-info-pid python))
+                             ".to." (write-to-string (python-numpy-pickle-index python)))))
+          (uiop:delete-file-if-exists filename))))
 
-(defun make-python-object-finalize (&key (type "") handle)
+(defun make-python-object-finalize (&key (type "") handle (python *python*))
     "Make a PYTHON-OBJECT struct with a finalizer.
-This deletes the object from the dict store in python.
-
-Uses trivial-garbage (public domain)
-"
-    (tg:finalize
-     (make-python-object :type type
-                         :handle handle)
-     (let ((python-id *current-python-process-id*))
+ This deletes the object from the dict store in python."
+  (tg:finalize
+     (make-python-object :type type :handle handle)
+     (let ((python-id (uiop:process-info-pid python)))
        (lambda () ; This function is called when the python-object is garbage collected
          (ignore-errors
            ;; Put on a list to free later. Garbage collection may happen
            ;; in parallel with the main thread, which may be executing other commands.
-           (free-python-object python-id handle))))))
+          (free-python-object python-id handle python))))))
 
 (defun stream-read-string (stream)
   "Reads a string from a stream
@@ -80,16 +77,17 @@ Expects a line containing the number of chars following
 e.g. '5~%hello'
 Returns the string or nil on error
 "
-  (let ((nchars (parse-integer (read-line stream))))
-    (with-output-to-string (str)
-      (iter (for i from 1 to nchars)
-        (for char = (read-char stream))
-        (write-char char str)))))
+  (declare (optimize speed safety))
+  (let* ((nchars (parse-integer (read-line stream)))
+         (seq (make-array nchars :element-type 'character)))
+    (read-sequence seq stream)
+    seq))
 
 (defun stream-read-value (stream)
   "Get a value from a stream
 Currently works by reading a string then using read-from-string
 "
+  (declare (optimize speed safety))
   (let ((str (stream-read-string stream)))
     (multiple-value-bind (value count)
         (read-from-string str)
