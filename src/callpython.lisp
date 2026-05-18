@@ -43,6 +43,9 @@
   (declare (ignorable rest))
   #+debug `(format *standard-output* ,@rest))
 
+(defstruct python-error
+  thunk)
+
 (defun dispatch-messages (output-stream input-stream)
   "Read response from python, loop to handle any callbacks.  Returns
  either objects or delays (lambda ()) -> somethings.  Will potentially
@@ -66,7 +69,7 @@
 		    (values res t))))
            (#\e (let ((text (stream-read-string output-stream)))
                   (cp-debug-print "DP: got error ~A~%" text)
-		  (return (lambda () (error 'pyerror :text text)))))
+		  (return (make-python-error :thunk (lambda () (error 'pyerror :text text))))))
            (#\d
             ;; Delete object. This is called when an UnknownLispObject is deleted
 	    (free-handle (stream-read-value output-stream))
@@ -114,7 +117,7 @@
            (#\p				; Print stdout
             (let ((print-string (stream-read-value output-stream)))
 	      (lambda () (princ print-string))))
-           (otherwise (lambda () (error "Unhandled message type '~d'" message-char)))))))
+           (otherwise (make-python-error :thunk (lambda () (error "Unhandled message type '~d'" message-char))))))))
 
 
 (defmacro with-timing (&rest body)
@@ -171,9 +174,9 @@ Passes strings as they are, without any 'pythonize'ation."
 	        (unless (null (python-interaction-results python))
 		  (format *standard-output* "Unexpected results from python process ~A~%" (python-interaction-results python))
 		  (map nil (lambda (x)
-			     (when (functionp x)
+			     (when (python-error-p x)
 			       (restart-case
-				   (funcall x)
+				   (funcall (python-error-thunk x))
 			         (IGNORE ()))))
 		       (python-interaction-results python))
 		  (setf (python-interaction-results python) nil))

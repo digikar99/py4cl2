@@ -9,7 +9,7 @@
 ;; This is not thread-safe
 (defvar *handle-counter* 0)
 
-(defvar *lisp-objects* (make-hash-table :test #'eql))
+(defvar *lisp-objects* (make-hash-table :test #'eql :synchronized t))
 
 (defun clear-lisp-objects (python)
   "Clear the *lisp-objects* object store, allowing them to be GC'd"

@@ -100,8 +100,8 @@
 	finally
 	   (pp-debug-print "GR: Got result ~S~%" result)
            ;; It's a delayed error
-           (when (functionp result)
-             (funcall result))
+           (when (python-error-p result)
+             (funcall (python-error-thunk result)))
            (when (python-interaction-results python)
              (error (format nil "More results than expected: ~A" (pop (python-interaction-results python)))))
 	   (return result)))))
@@ -199,7 +199,13 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
  *lispifiers* and *pythonizers*."
   (let ((*get-results*
 	 (lambda (python)
-	   (dispatch-messages (python-output python) (python-input python))))
+	   (let ((result (dispatch-messages (python-output python) (python-input python))))
+	     (if (python-error-p result)
+	       ;; Handle errors
+		 (restart-case
+		     (funcall (python-error-thunk result))
+		   (ignore ()))
+		 result))))
         (*print-python-object* nil)) ;; avoid deadlocks
     (declare (special *get-results* *print-python-object*))
     (loop
