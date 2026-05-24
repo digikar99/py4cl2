@@ -182,22 +182,20 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
  We need to synchronize ourselves with the python output, there is no way to guarantee
  timing between flushing and when we get the data, so we need to use a marker in the stream
  ... we use a random value."
-  (with-gensyms (python py-out output-stream)
-    `(with-output-to-string (,output-stream)
-       (let ((,python *python*))
-         (when (and *warn-on-unavailable-feature-usage*
-                    (not (member :with-python-output *internal-features*)))
-           (warn "WITH-PYTHON-OUTPUT may not work on your system."))
-         (unwind-protect (progn
-                           (setf (python-in-with-python-output ,python) t)
-                           ,@forms-decl
-                           (sleep 0.00002)
-                           (let ((,py-out (uiop:process-info-error-output ,python)))
-                             (iter (while (listen ,py-out))
-                               (for char = (read-char ,py-out nil))
-                               (when char (write-char char ,output-stream)))))
-           (setf (python-in-with-python-output ,python) nil)
-           (bt:signal-semaphore (python-output-semaphore ,python)))))))
+  `(progn
+     (when (and *warn-on-unavailable-feature-usage*
+                (not (member :with-python-output *internal-features*)))
+       (warn "WITH-PYTHON-OUTPUT may not work on your system."))
+     (unwind-protect
+          (progn
+            (raw-pyexec
+             "import io; import sys
+_py4cl_stdout_streams.append(sys.stdout)
+sys.stdout = io.StringIO()")
+            ,@forms-decl
+            ;; (sleep 0.00002)
+            (raw-pyeval "sys.stdout.getvalue()"))
+       (raw-pyexec "sys.stdout = _py4cl_stdout_streams.pop()"))))
 
 (defun python-start-if-not-alive (&optional (python *python*))
   "If no python process is running, tries to start it.
