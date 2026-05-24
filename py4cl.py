@@ -442,6 +442,8 @@ def message_dispatch_loop():
 
 	e  Evaluate an expression (expects string)
 	x  Execute a statement (expects string)
+	O  Enable handles
+	o  Disable handles
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
