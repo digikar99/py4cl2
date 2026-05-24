@@ -28,6 +28,11 @@ which in turn can call PYSTART")
     :type bt:lock
     :reader python-raw-py-lock
     :documentation "This is the user facing lock through raw-py.")
+   (thread-end-signal
+    :initform nil
+    :type boolean
+    :accessor python-thread-end-signal
+    :documentation "Set to T to gently stop threads")
    (freed-python-objects
     :initform nil
     :type list

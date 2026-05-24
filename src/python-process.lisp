@@ -221,6 +221,7 @@ If still not alive, raises a condition."
   "Stop (Quit) the python process"
   (unless (python-alive-p python)
     (return-from pystop))
+  (setf (python-thread-end-signal python) t)
   (python-subprocess-quit-or-kill python)
   ;; We no longer care about any objects that needed to be freed in python
   (setf (python-freed-python-objects python) nil)
