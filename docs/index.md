@@ -893,8 +893,90 @@ Inheritance then works as usual with CLOS methods:
     (chain* object 'value) ; Call TEST-CLASS getattr method via CALL-NEXT-METHOD
     (chain* object 'other))) ;=> (42 3)
 ```
-
 ### python-setattr
+
+Undocumented
+
+### raw-pyrun: Running Python GUI apps
+
+The following can be used to produce a plot with matplotlib. However, it does not provide interactivity, in the sense it blocks the REPL, and you can no longer issue further commands to python. (See the [interactivity guide for matplotlib](https://matplotlib.org/stable/users/explain/figure/interactive_guide.html).
+
+```lisp
+(ql:quickload :py4cl2 :silent t)
+
+(py4cl2:defpymodule "numpy" nil :lisp-package "NP")
+(py4cl2:defpymodule "scipy.integrate" nil :lisp-package "INTEGRATE")
+
+;; Integrate some ODEs
+(defparameter *data*
+  (integrate:odeint
+   :func (lambda (y time)
+           (list (aref y 1)       ; dy[0]/dt = y[1]
+                 (- (aref y 0)))) ; dy[1]/dt = -y[0]
+   :y-0 #(1.0 0.0)   ; Initial state
+   :t (np:linspace :start 0.0 :stop (* 2 pi) :num 20)))
+                                        ; Vector of times
+
+; (array-dimensions *data*) => (20 2)
+
+;; Make a plot, save and show it in a window
+(py4cl2:defpymodule "matplotlib.pyplot" nil :lisp-package "PLT")
+
+(plt:plot *data*)
+(plt:xlabel :xlabel "Time")
+(plt:savefig "result.pdf")
+(plt:show)
+```
+
+<img margin="auto" width="75%" src="./docs/readme_matplotlib.png"></img>
+
+To enable interactivity, the main thread of the Python process needs to run the GUI main loop. This can be achieved using `raw-pyrun` along with some helper python code.
+
+can be used to transfer the control py4cl2 loop can to not block and be called regularly by the gui main loop. To do so, see the example src/PyQt6_example.py where we create a matplotlib plot on the Qt6 backend.  To run it, you would do the following:
+
+```py
+
+```
+
+```lisp
+(raw-pyexec "
+def start_app (dispatch_messages):
+    import PyQt6
+    import sys
+    import matplotlib
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QTimer
+    app = QApplication(sys.argv)
+
+    matplotlib.use('QtAgg')
+    plot = plt.plot([1, 2, 3],[4, 5, 6])
+    plt.show(block=False)
+
+    timer = QTimer()
+    timer.timeout.connect(lambda : dispatch_messages(blocking=False));
+    timer.start(100);
+    print('Going into main loop, will return when all windows closed')
+    app.exec()
+    print('No more windows, returning to default messsage_dispatch_loop')
+")
+;; start the gui loop and a simple plot.
+(raw-pyrun "start_app(_py4cl_dispatch_messages);")
+(pyeval "1 + 1") ;; still works despite GUI refreshing as needed
+```
+
+Alternatively, you can put the helper python code in a module and ensure sys.path can locate the module:
+
+```
+(pyexec (format nil "import sys; sys.path.insert(0, '~a')" "/path/to/helper/module"))
+```
+
+### Multiple Python processes
+
+You can manage multiple running python processes.  By default there is
+a dynamic variable `*python*` bound to the running process.  If you
+want to create a new one, call `(pystart)` and `(let ((*python*
+my-python))` around your calls.
 
 ## Type Mapping and Pythonize
 

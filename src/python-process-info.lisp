@@ -4,7 +4,12 @@
 (defvar *python* nil "Current `python' instance")
 
 (defclass python-process-info (process-info)
-  ((start-lock
+  ((lock
+    :initform (bt:make-recursive-lock "python-lock")
+    :type bt:recursive-lock
+    :reader python-lock
+    :documentation "General lock to replace all locks. (TODO: Can we do it?)")
+   (start-lock
     :initform (bt:make-recursive-lock "python-start-lock")
     :type bt:recursive-lock
     :documentation
@@ -19,6 +24,19 @@ which in turn can call PYSTART")
     :type (or null bt:thread)
     :reader python-output-thread
     :documentation "This is for reading stuff coming back on stderr (printed stuff from python)")
+   (results-queue
+    :initform nil
+    :type list
+    :accessor python-results-queue
+    :documentation "This is used by dispatch-messages-loop to handle outputs from multiple python threads.")
+   (results-condition
+    :initform (bt:make-condition-variable :name "python-results-condition")
+    :reader python-results-condition)
+   (message-dispatch-thread
+    :initform nil
+    :type (or null bt:thread)
+    :reader python-message-dispatch-thread
+    :documentation "This is for reading python process's output stream and dispatching those messages.")
    (numpy-installed-p
     :initform nil
     :type boolean
@@ -67,3 +85,7 @@ printed output and misc error output."))
       (setf (slot-value python-process-info (closer-mop:slot-definition-name slot-defn))
             (slot-value process-info (closer-mop:slot-definition-name slot-defn))))
     python-process-info))
+
+(defmacro with-python-lock ((process) &body body)
+  `(bt:with-recursive-lock-held ((python-lock ,process))
+     ,@body))

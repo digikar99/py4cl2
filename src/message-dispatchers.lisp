@@ -11,6 +11,9 @@
 (defmethod dispatch-message ((cmd-char (eql #\e)) read-stream write-stream)
   (error 'pyerror :text (stream-read-string read-stream)))
 
+(defmethod dispatch-message ((cmd-char (eql #\E)) read-stream write-stream)
+  (make-instance 'pyerror :text (stream-read-string read-stream)))
+
 (defmethod dispatch-message ((cmd-char (eql #\d)) read-stream write-stream)
   "Delete object. This is called when an UnknownLispObject is deleted"
   (free-handle (stream-read-value read-stream)))
@@ -80,3 +83,58 @@
                    'python-eof-but-alive
                    'python-eof-and-dead)
                :python-process process)))))
+
+(defvar *python-debug-print* nil
+  "When non-NIL, various py4cl2 functions print additional info for debug.")
+
+(defun python-debug-print (&rest args)
+  (when *python-debug-print*
+    (apply #'format *standard-output* args)))
+
+(defun dispatch-messages-loop (python &optional main-thread)
+  "This is the loop that handles all communication back from the
+ python process.  We need to be re-entrant because we may call
+ callbacks from this thread which are allowed to call back into python
+ and can block on get-results.  That includes being able to print
+ python objects.  Re-entrance is handled by having calls into
+ get-result be difference when in this loop.  We need to handle
+ *lispifiers* and *pythonizers*."
+  (let ((*python-results-function* 'dispatch-messages)
+        (*print-python-object* nil)  ; avoid deadlocks
+        (output-stream (uiop:process-info-output python)))
+    (declare (special *python-results-function* *print-python-object*))
+    (loop
+      while (python-alive-p python)
+      do (handler-case
+             (progn
+               (python-debug-print "IT: Waiting for python to say something~%")
+               (peek-char nil output-stream t)
+               (python-debug-print "IT: Got something, grabbing interaction lock~%")
+               (let ((*lispifiers* (python-lispifiers python))
+                     (*pythonizers* (python-pythonizers python)))
+                 (declare (special *lispifiers* *pythonizers*))
+                 (with-python-lock (python)
+                   (handler-case (push (dispatch-messages python)
+                                       (python-results-queue python))
+                     (error (c)
+                       (when main-thread
+                         (bt:interrupt-thread main-thread (lambda () (error c)))))))
+                 (bt:condition-notify (python-results-condition python))))
+           (end-of-file (condition)
+             ;; We end up signalling errors from both this thread and the stderr thread
+             (format *standard-output* "Python #~A STDOUT got ~A~%"
+                     (uiop:process-info-pid python)
+                     condition)
+             (with-python-lock (python)
+               (push
+                (make-instance (if (python-alive-p python)
+                                   'python-eof-but-alive
+                                   'python-eof-and-dead)
+                               :python-process python)
+                (python-results-queue python)))
+             (bt:condition-notify (python-results-condition python)))))))
+
+(defun make-python-message-dispatch-thread (python)
+  (let ((main-thread (bt:current-thread)))
+    (bt:make-thread (lambda () (dispatch-messages-loop python main-thread))
+                    :name "python-message-dispatch-thread (sys.stdout)")))

@@ -18,6 +18,7 @@ import os
 import signal
 import traceback
 import threading
+import time
 
 numpy_is_installed = False
 try:
@@ -119,7 +120,7 @@ class LispCallbackObject (object):
 
 			# Wait for a value to be returned.
 			# Note that the lisp function may call python before returning
-			return message_dispatch_loop()
+			return dispatch_messages_loop()
 
 
 class UnknownLispObject (object):
@@ -160,7 +161,7 @@ class UnknownLispObject (object):
 			sys.stdout = output_stream
 
 		# Wait for the result
-		return message_dispatch_loop()
+		return dispatch_messages_loop()
 
 	def __setattr__(self, attr, value):
 		if self.__during_init:
@@ -171,7 +172,7 @@ class UnknownLispObject (object):
 		finally:
 			sys.stdout = output_stream
 		# Wait until finished, to syncronise
-		return message_dispatch_loop()
+		return dispatch_messages_loop()
 
 python_to_lisp_type = {
 	bool       : "BOOLEAN",
@@ -422,12 +423,17 @@ def return_value(value):
 	Return value to lisp process, by writing to return_stream
 	"""
 	if isinstance(value, Exception):
-		return return_error(value)
+		return return_blocking_error(value)
 	# return_stream.flush() # TODO not sure
 	send_value("r", value)
 
-def return_error(error):
+def return_blocking_error(error):
+	"Lisp will (should) interpret this to immediately signal an error from dispatch-messages-loop"
 	send_value("e", error)
+
+def return_nonblocking_error(error):
+	"Lisp will (should) interpret this to return the error object to whoever called raw-py and then signal the error"
+	send_value("E", error)
 
 def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
@@ -436,7 +442,7 @@ def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
 	return str(value)[1:].replace("-", "_")
 
-def message_dispatch_loop():
+def dispatch_messages(blocking):
 	"""
 	Wait for a message, dispatch on the type of message.
 	Message types are determined by the first character:
@@ -448,11 +454,22 @@ def message_dispatch_loop():
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
+	busy_loop = 100
 	while True:
 		try:
 			output_stream.flush()
+			if not blocking:
+				os.set_blocking(sys.stdin.fileno(), False)
 			# Read command type
 			cmd_type = sys.stdin.read(1)
+			if cmd_type == "":
+				if busy_loop > 0 and not blocking:
+					busy_loop = busy_loop - 1
+					continue;
+				if not blocking:
+					os.set_blocking(sys.stdin.fileno(), True)
+				return None
+			busy_loop = 100
 			# It is possible that python would have finished sending the data to CL
 			# but CL would still not have finished processing. We will receive further
 			# instructions only after CL has finished processing, and therefore we can delete
@@ -473,23 +490,38 @@ def message_dispatch_loop():
 			elif cmd_type == "q":
 				exit(0)
 			elif cmd_type == "r": # return value from lisp function
-				return recv_value()
+				return recv_value() # break out of the while loop
 			elif cmd_type == "O":  # Return only handles
 				return_values += 1
 			elif cmd_type == "o":  # Return values when possible (default)
 				return_values -= 1
+			elif blocking:
+				return_blocking_error("Unknown message type \"{0}\".".format(cmd_type))
 			else:
-				return_error("Unknown message type \"{0}\".".format(cmd_type))
+				return_nonblocking_error("Unknown message type \"{0}\".".format(cmd_type))
 		except KeyboardInterrupt as e: # to catch SIGINT
 			# output_stream.write("Python interrupted!\n")
 			return_value(None)
 		except Exception as e:
-			return_error(e)
+			if blocking:
+				return_blocking_error(e)
+			else:
+				return_nonblocking_error(e)
+				return
+
+def dispatch_messages_loop():
+	try:
+		while True:
+			dispatch_messages(blocking=True)
+	except EOFError:
+		return
 
 # Store for python objects which cannot be translated to Lisp objects
 python_objects = {}
 python_handle = itertools.count(0)
 
+# For user to use to give time to our dispatch loop
+eval_globals["_py4cl_dispatch_messages"] = dispatch_messages
 # Make callback function accessible to evaluation
 eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol
@@ -521,4 +553,4 @@ async_results = {}  # Store for function results. Might be Exception
 async_handle = itertools.count(0) # Running counter
 
 # Main loop
-message_dispatch_loop()
+dispatch_messages_loop()

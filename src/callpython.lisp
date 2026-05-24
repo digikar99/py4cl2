@@ -41,26 +41,42 @@
 
 
 ;; ============================== RAW FUNCTIONS ================================
-(declaim (ftype (function (character &rest string)) raw-py))
-(defun raw-py (cmd-char &rest strings)
+(declaim (ftype (function (boolean character &rest string)) raw-py))
+(defun raw-py (wait-for-results cmd-char &rest strings)
   "Intended as an abstraction to RAW-PYEVAL and RAW_PYEXEC.
-Passes strings as they are, without any 'pythonize'ation."
+Passes strings as they are, without any 'pythonize'ation.
+
+WAIT-FOR-RESULTS should be non-NIL unless you want to pass
+control permanently to, say, a GUI main loop in the python process."
   (python-start-if-not-alive)
-  (let ((stream (uiop:process-info-input *python*))
-        (str (apply #'concatenate 'string strings)))
-    ;; wait for previous processing to be done
-    (bt:with-recursive-lock-held ((python-raw-py-lock *python*))
+  (let* ((python *python*)
+         (stream (uiop:process-info-input python))
+         (str (apply #'concatenate 'string strings)))
+    (with-python-lock (python)
+      (setf (python-lispifiers python) *lispifiers*)
+      (setf (python-pythonizers python) *pythonizers*)
       (write-char cmd-char stream)
       (stream-write-string str stream)
       (force-output stream)
       ;; wait for python output
-      (dispatch-messages *python*))))
+      (when wait-for-results
+        (bt:condition-wait (python-results-condition python) (python-lock python))
+        (let ((result (pop (python-results-queue python))))
+          (if (typep result 'error)
+              (error result)
+              result))))))
+
+(defun raw-pyrun (&rest strings)
+  "Execute strings without expecting any return, used to run GUI apps by transferring
+control to python. Passes strings as they are, without any 'pythonize'ation."
+  (python-start-if-not-alive)
+  (apply #'raw-py nil #\x strings))
 
 (declaim (ftype (function (&rest string)) raw-pyeval))
 (defun raw-pyeval (&rest strings)
   "Calls python eval on the concatenation of strings, as they are, without any
 pythonization or modification."
-  (restart-case (apply #'raw-py #\e strings)
+  (restart-case (apply #'raw-py t #\e strings)
     (raw-pyexec ()
       :report "If the error is 'invalid syntax', using 'exec' instead of 'eval' might work."
       (apply #'raw-pyexec strings)
@@ -78,7 +94,7 @@ For instance,
   foo()
 will result in 'sys' name not defined PYERROR."
   (python-start-if-not-alive)
-  (apply #'raw-py #\x strings)
+  (apply #'raw-py t #\x strings)
   (values))
 
 (defun (setf raw-pyeval) (value &rest args)

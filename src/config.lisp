@@ -45,7 +45,12 @@ For example,
   ; 5        ; lispifier uncalled for non-VECTOR
   5
 
-NOTE: This is a new feature and hence unstable; recommended to avoid in production code."
+NOTE: This is a new feature and hence unstable; recommended to avoid in production code.
+
+WARNING: This applies to any operations that occur within this
+context, but ALSO to any asynchronous callbacks that may occur if you
+are running, say, a GUI in python.  This makes it fundamentally unsafe
+as implemented."
   `(let ((*lispifiers* (list* ,@(loop :for (type lispifier) :in overriding-lispifiers
                                       :collect `(cons ',type ,lispifier))
                               *lispifiers*)))
@@ -69,7 +74,12 @@ For example,
   ; 5        ; pythonizer uncalled for non-VECTOR
   5
 
-NOTE: This is a new feature and hence unstable; recommended to avoid in production code."
+NOTE: This is a new feature and hence unstable; recommended to avoid in production code.
+
+WARNING: This applies to any operations that occur within this
+context, but ALSO to any asynchronous callbacks that may occur if you
+are running, say, a GUI in python.  This makes it fundamentally unsafe
+as implemented."
   `(let ((*pythonizers* (list* ,@(loop :for (type pythonizer) :in overriding-pythonizers
                                        :collect `(cons ',type ,pythonizer))
                                *pythonizers*)))

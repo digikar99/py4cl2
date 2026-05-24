@@ -28,6 +28,7 @@
    #:python-eof-and-dead
    #:raw-pyeval
    #:raw-pyexec
+   #:raw-pyrun
    #:pyeval
    #:pyexec
    #:pycall

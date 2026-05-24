@@ -66,15 +66,16 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 
     ;; clear any old stuff if restarting
     (setf (slot-value python 'output-thread) (make-python-output-thread python))
+    (setf (slot-value python 'message-dispatch-thread) (make-python-message-dispatch-thread python))
 
     (assert (uiop:process-alive-p python))
+    (setf *python* python)
 
     (setf (python-numpy-installed-p python) (numpy-installed-p python))
     (when (python-numpy-installed-p python)
       ;; FIXME: The features might need to be made subprocess specific
       (pushnew :arrays *internal-features*))
 
-    (setf *python* python)
     (apply #'raw-pyexec *additional-init-codes*)
     python))
 
@@ -82,7 +83,7 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
   "Returns non-NIL if the python process is alive
  (e.g. SBCL -> T, CCL -> RUNNING). Works on a `python'
  or a python-process-info thereof"
-  (uiop:process-alive-p python))
+  (and python (uiop:process-alive-p python)))
 
 #+unix
 (defun bash-escape-string (string)
