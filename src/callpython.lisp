@@ -81,17 +81,18 @@
                 ;; User must register a function to handle slot access
                 (dispatch-reply
                  input-stream
-                 (restart-case
-                     (python-getattr object slot-name)
-                   ;; Provide some restarts for missing handler or missing slot
-		   (return-nil () (values nil t))
-                   (return-zero () 0)
-                   (enter-value (return-value)
-                     :report "Provide a value to return"
-                     :interactive (lambda ()
-                                    (format t "Enter a value to return: ")
-                                    (list (read)))
-		     (values return-value t)))))))
+                 (with-sldb-default-restart return-nil
+                   (restart-case
+                       (python-getattr object slot-name)
+                     ;; Provide some restarts for missing handler or missing slot
+		     (return-nil () (values nil t))
+                     (return-zero () 0)
+                     (enter-value (return-value)
+                       :report "Provide a value to return"
+                       :interactive (lambda ()
+                                      (format t "Enter a value to return: ")
+                                      (list (read)))
+		       (values return-value t))))))))
            (#\S ;; Slot write
 	    (destructuring-bind (handle slot-name slot-value)
                 (stream-read-value output-stream)
@@ -104,11 +105,15 @@
 	    (cp-debug-print "DP: callback~%")
             (let* ((call-value (stream-read-value output-stream))
 		   (_ (cp-debug-print "DP: calling ~A~%" call-value))
-                   (return-value (apply (lisp-object (first call-value))
-                                        (if (and (stringp (second call-value))
-                                                 (string= "()" (second call-value)))
-                                            ()
-                                            (second call-value)))))
+                   (return-value
+                     (with-sldb-default-restart ignore
+                       (restart-case
+                           (apply (lisp-object (first call-value))
+                                  (if (and (stringp (second call-value))
+                                           (string= "()" (second call-value)))
+                                      ()
+                                      (second call-value)))
+                         (ignore () nil)))))
 	      (declare (ignore _))
 	      (cp-debug-print "DP: callback returned ~A~%" return-value)
 	      (dispatch-reply input-stream return-value)

@@ -187,7 +187,11 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 
 (defun get-results (python)
   (funcall *get-results* python))
-  
+
+(defmacro with-sldb-default-restart (restart-name &body body)
+  `(let (#+swank (swank:*sldb-quit-restart* ',restart-name))
+     ,@body))
+
 (defun interaction-loop
     (python)
   "This is the loop that handles all communication back from the
@@ -202,10 +206,11 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 	   (let ((result (dispatch-messages (python-output python) (python-input python))))
 	     (if (python-error-p result)
 	       ;; Handle errors
-		 (restart-case
-		     (funcall (python-error-thunk result))
-		   (ignore ()))
-		 result))))
+                 (with-sldb-default-restart ignore
+		   (restart-case
+		       (funcall (python-error-thunk result))
+		     (ignore ()))
+		   result)))))
         (*print-python-object* nil)) ;; avoid deadlocks
     (declare (special *get-results* *print-python-object*))
     (loop
