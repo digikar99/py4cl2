@@ -209,8 +209,8 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
                  (with-sldb-default-restart ignore
 		   (restart-case
 		       (funcall (python-error-thunk result))
-		     (ignore ()))
-		   result)))))
+		     (ignore ())))
+		 result))))
         (*print-python-object* nil)) ;; avoid deadlocks
     (declare (special *get-results* *print-python-object*))
     (loop
@@ -259,6 +259,8 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 		 (bt:condition-notify (python-interaction-wait python)))))))))
 
 (defparameter *pystart-lock* (bt:make-recursive-lock))
+
+(defparameter *spurious-info* (make-array 0 :fill-pointer t :element-type 'base-char))
 
 (defun pystart (&optional (command (config-var 'pycmd)) (python *python*))
   "Start a new python subprocess if PYTHON is not currently alive.  If an
@@ -328,6 +330,7 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 				      (format *standard-output* "Spurious output from python #~A:~%"
 					      (python-id python))
 				      (setf last-notified-of-spurious-output (get-universal-time)))
+                                    (vector-push-extend char *spurious-info*)
 				    (write-char char))))))
                    (simple-error (condition)
 		     (cerror "ACCEPT" "~S~%  ~A~%occured while inside python-output-thread" condition condition))

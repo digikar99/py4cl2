@@ -187,11 +187,11 @@ Passes strings as they are, without any 'pythonize'ation."
 		  (setf (python-interaction-results python) nil))
                 (setf (python-lispifiers python) *lispifiers*)
                 (setf (python-pythonizers python) *pythonizers*)
-      (write-char cmd-char stream)
-      (stream-write-string str stream)
+                (write-char cmd-char stream)
+                (stream-write-string str stream)
                 (force-output stream))
               (cp-debug-print "RP: Release interaction lock and now getting results~%")
-      ;; wait for python output
+              ;; wait for python output
               (get-results python)))
         (add-to-timing (current-time)))))
 
