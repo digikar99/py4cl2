@@ -393,8 +393,8 @@ If still not alive, raises a condition."
   (setf (python-thread-end-signal python) t)
   (when (python-alive-p python)
     (sleep 0.01) ;; wait for threads to die
-    (write-char #\q (python-input python)) ;; can't be sure they aren't still waiting for output
-    (finish-output (python-input python))
+    (ignore-errors (write-char #\q (python-input python))) ;; can't be sure they aren't still waiting for output
+    (ignore-errors (finish-output (python-input python)))
     (loop repeat 1000
 	  until (not (python-alive-p python)))
     (sleep 0.01)) ;; wait for python to die before axing it
