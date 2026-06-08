@@ -71,6 +71,9 @@
  or a python-subprocess thereof"
   (and python (subprocess python) (uiop:process-alive-p (subprocess python))))
 
+(defstruct python-error
+  thunk)
+
 (defmacro pp-debug-print (&rest rest)
   (declare (ignorable rest))
   #+debug `(format *standard-output* ,@rest))

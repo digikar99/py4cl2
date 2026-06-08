@@ -43,9 +43,6 @@
   (declare (ignorable rest))
   #+debug `(format *standard-output* ,@rest))
 
-(defstruct python-error
-  thunk)
-
 (defun dispatch-messages (output-stream input-stream)
   "Read response from python, loop to handle any callbacks.  Returns
  either objects or delays (lambda ()) -> somethings.  Will potentially
