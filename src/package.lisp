@@ -17,7 +17,9 @@
    #:python-start-if-not-alive
    #:pyinterrupt)
   (:export ; writer
-   #:pythonize)
+   #:pythonize
+   #:+py-none+
+   #:+py-empty-tuple+)
   (:export ; reader
    #:python-object
    #:*print-python-object*

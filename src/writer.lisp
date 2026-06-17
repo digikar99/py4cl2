@@ -184,8 +184,8 @@ Is numpy installed on python side?"
     (vector . "list")
     (hash-table . "dict")
     (string . "str")
-    ("None" . "None")
-    ("()" . "()")))
+    (+py-none+ . "None")
+    (+py-empty-tuple+ . "()")))
 ;; leaves out inspect._empty
 
 (defmethod pythonize ((obj cons))

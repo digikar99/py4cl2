@@ -209,7 +209,7 @@ def lispify_dict(dict):
 
 def lispify_tuple(tuple):
 	if len(tuple) == 0:
-		return "\"()\""
+		return "(quote py4cl2::+py-empty-tuple+)"
 	else:
 		return "(quote (" + " ".join(lispify(elt) for elt in tuple) + "))"
 
@@ -240,7 +240,7 @@ def lispify_exception (obj):
 
 lispifiers = {
 	bool              : lambda x: "T" if x else "NIL",
-	type(None)        : lambda x: "\"None\"", # Better be "NIL"..?
+	type(None)        : lambda x: "(quote py4cl2::+py-none+)", # Better be "NIL"..?
 	int               : str,
 	fractions.Fraction: str,
 	float             : lispify_float, # floats in python are double-floats of common-lisp
