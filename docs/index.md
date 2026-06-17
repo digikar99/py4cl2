@@ -548,7 +548,7 @@ Equivalent to the lisp `(funcall function &rest arguments)`. Call a python (or l
 ```lisp
 CL-USER> (py4cl2:pycall "print" "hello")
 ;; hello
-"None"
++py-none+
 CL-USER> (py4cl2:pycall #'+ 2 3 1)
 6
 ```
@@ -581,7 +581,7 @@ Total params: 652,352
 Trainable params: 652,352
 Non-trainable params: 0
 __________________________________________________________________________________________________
-"None"
++py-none+
 ```
 
 See [pymethod-list](#pymethod-list).
@@ -667,7 +667,7 @@ CL-USER> (pyslot-list (model))
  "uses_learning_phase" "weights")
 
 CL-USER> (pyeval (model) ".inputs")
-"None"
++py-none+
 ```
 
 Optionally, see [pyslot-value](#pyslot-value)
@@ -928,10 +928,10 @@ reader; the lisp function `pythonize` outputs strings which can be
 Special conversion rules include:
 
 ```
-nil     False
-t       True
-"None"  None
-"()"    ()        # empty tuple
+nil              False
+t                True
++py-none+        None
++py-empty-tuple+ ()        # empty tuple
 ```
 
 

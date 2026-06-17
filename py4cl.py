@@ -209,7 +209,7 @@ def lispify_dict(dict):
 
 def lispify_tuple(tuple):
 	if len(tuple) == 0:
-		return "\"()\""
+		return "(quote py4cl2::+py-empty-tuple+)"
 	else:
 		return "(quote (" + " ".join(lispify(elt) for elt in tuple) + "))"
 
@@ -240,7 +240,7 @@ def lispify_exception (obj):
 
 lispifiers = {
 	bool              : lambda x: "T" if x else "NIL",
-	type(None)        : lambda x: "\"None\"", # Better be "NIL"..?
+	type(None)        : lambda x: "(quote py4cl2::+py-none+)", # Better be "NIL"..?
 	int               : str,
 	fractions.Fraction: str,
 	float             : lispify_float, # floats in python are double-floats of common-lisp
@@ -442,6 +442,8 @@ def message_dispatch_loop():
 
 	e  Evaluate an expression (expects string)
 	x  Execute a statement (expects string)
+	O  Enable handles
+	o  Disable handles
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
@@ -492,6 +494,7 @@ eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol
 eval_globals["_py4cl_UnknownLispObject"] = UnknownLispObject
 eval_globals["_py4cl_objects"] = python_objects
+eval_globals["_py4cl_stdout_streams"] = []
 eval_globals["_py4cl_generator"] = generator
 # These store the environment used when eval-ing strings from Lisp
 eval_globals["_py4cl_config"] = config
