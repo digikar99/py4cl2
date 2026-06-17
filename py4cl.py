@@ -282,14 +282,13 @@ if numpy_is_installed: #########################################################
 		numpy.dtype("bool_"): "(cl:quote cl:bit)",
 		numpy.dtype("float64"): "(cl:quote cl:double-float)",
 		numpy.dtype("float32"): "(cl:quote cl:single-float)",
-		numpy.dtype("object"): "cl:t",
 	}
 
 	def numpy_to_cl_type(numpy_type):
-		try:
+		if numpy_type in numpy_cl_type:
 			return numpy_cl_type[numpy_type]
-		except KeyError:
-			raise Exception("Do not know how to convert {0} to CL.".format(str(numpy_type)))
+		else:
+			return "cl:t"
 
 	def lispify_ndarray (obj):
 		"""Convert a NumPy array to a string which can be read by lisp
