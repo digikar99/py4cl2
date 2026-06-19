@@ -60,7 +60,7 @@ Default implementation creates a handle to an unknown Lisp object.")
                              "- _py4cl_numpy.float32('inf')")
                             (t
                              (concatenate 'string "_py4cl_numpy.float32("
-                                          (write-to-string obj) ")"))))
+                                          (substitute #\e #\f (write-to-string obj)) ")"))))
         (double-float (cond ((float-features:float-nan-p obj)
                              "_py4cl_numpy.float64('nan')")
                             ((= obj float-features:double-float-positive-infinity)
