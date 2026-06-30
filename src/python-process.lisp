@@ -239,6 +239,11 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 
 (defvar *request-id* (list 0))
 
+(defstruct python-message
+  (cmd-char #\! :type character)
+  (string "" :type string)
+  (response-id -1 :type fixnum))
+
 (defun make-request (python cmd-char request-string)
   ;; For use by Lisp client threads to call into Python
   ;; Outer lock keeps out other lisp clients
@@ -306,7 +311,7 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
     do
        (bt:with-recursive-lock-held ((python-interaction-lock python))
          (let ((p (peek (python-read-queue python))))
-           (when (and p (eql (python-message-cmd-char p) #\c))
+           (when (and p (member (python-message-cmd-char p) '(#\c #\d)))
              ;;(notify-user "async callback processing ~A" p) 
              (let ((raw-response (read-from-python-queue python)))
                (multiple-value-bind (response response-returned)
@@ -322,11 +327,6 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
                                (error "Unexpected response ~A" response)
                              (ignore ()))))))))))
        (sleep 0.05)))
-
-(defstruct python-message
-  (cmd-char #\! :type character)
-  (string "" :type string)
-  (response-id -1 :type fixnum))
 
 (defparameter *pystart-lock* (bt:make-recursive-lock))
 
