@@ -43,41 +43,26 @@
   (declare (ignorable rest))
   #+debug `(format *standard-output* ,@rest))
 
-(defun dispatch-messages (output-stream input-stream)
-  "Read response from python, loop to handle any callbacks.  Returns
- either objects or delays (lambda ()) -> somethings.  Will potentially
- also talk back to python for reading and writing slots in lisp
- objects.  input-stream goes to python, output-stream comes from
- python.  Call me with the interaction-lock!  Returns
- (values result result-occurred-if-result-nil)"
+(defun dispatch (python python-message)
   (loop
-    ;; First character is type of message
-    :for message-char := (read-char output-stream)
+    for message-char = (python-message-cmd-char python-message)
+    for string = (python-message-string python-message)
     :do
        (cp-debug-print "DP: dispatch on '~A'~%" message-char)
        (return
          (case message-char
-           (#\r (return			; Returned value
-		  (let ((res (stream-read-value output-stream)))
-                    ;; Careful this print can cause a python object
-                    ;; to be printed, which will cause issues.
-		    (cp-debug-print "DP: ~A~%" res)
-                    (cp-debug-print "DP: Returning it~%")
-		    (values res t))))
-           (#\e (let ((text (stream-read-string output-stream)))
-                  (cp-debug-print "DP: got error ~A~%" text)
-		  (return (make-python-error :thunk (lambda () (error 'pyerror :text text))))))
-           (#\d
-            ;; Delete object. This is called when an UnknownLispObject is deleted
-	    (free-handle (stream-read-value output-stream))
+           (#\r (return (values (read-value string) t)))
+           (#\e (return (values (make-python-error :thunk (lambda () (error 'pyerror :text string))) t)))
+           (#\d ;; Delete object. This is called when an UnknownLispObject is deleted
+	    (free-handle (read-value string))
             (values))
            (#\s ;; Slot read
 	    (destructuring-bind (handle slot-name)
-                (stream-read-value output-stream)
+                (read-value string)
               (let ((object (lisp-object handle)))
                 ;; User must register a function to handle slot access
                 (dispatch-reply
-                 input-stream
+                 (python-input python)
                  (with-sldb-default-restart return-nil
                    (restart-case
                        (python-getattr object slot-name)
@@ -92,35 +77,32 @@
 		       (values return-value t))))))))
            (#\S ;; Slot write
 	    (destructuring-bind (handle slot-name slot-value)
-                (stream-read-value output-stream)
+                (read-value string)
               (let ((object (lisp-object handle)))
                 ;; User must register a function to handle slot write
                 (python-setattr object slot-name slot-value)
-                (dispatch-reply input-stream nil))
+                (dispatch-reply (python-input python) nil))
               (values)))
            (#\c ;; Callback. Return a list, containing function ID, then the args
-	    (cp-debug-print "DP: callback~%")
-            (let* ((call-value (stream-read-value output-stream))
-		   (_ (cp-debug-print "DP: calling ~A~%" call-value))
-                   (return-value
-                     (with-sldb-default-restart ignore
-                       (restart-case
-                           (apply (lisp-object (first call-value))
-                                  (if (and (stringp (second call-value))
-                                           (string= "()" (second call-value)))
-                                      ()
-                                      (second call-value)))
-                         (ignore () nil)))))
-	      (declare (ignore _))
-	      (cp-debug-print "DP: callback returned ~A~%" return-value)
-	      (dispatch-reply input-stream return-value)
-	      (cp-debug-print "DP: done~%")
-              (values)))
+            (let ((*lispifiers* (python-lispifiers python))
+                  (*pythonizers* (python-pythonizers python)))
+              (let* ((call-value (read-value string))
+                     (return-value
+                       (with-sldb-default-restart ignore
+                         (restart-case
+                             (apply (lisp-object (first call-value))
+                                    (if (and (stringp (second call-value))
+                                             (string= "()" (second call-value)))
+                                        ()
+                                        (second call-value)))
+                           (ignore () nil)))))
+	        (dispatch-reply (python-input python) return-value)
+                (values))))
            (#\p				; Print stdout
-            (let ((print-string (stream-read-value output-stream)))
+            (let ((print-string (read-value string)))
 	      (lambda () (princ print-string))))
-           (otherwise (make-python-error :thunk (lambda () (error "Unhandled message type '~d'" message-char))))))))
-
+           (otherwise
+            (values (make-python-error :thunk (lambda () (error "Unhandled message type '~d'" message-char))) t))))))
 
 (defmacro with-timing (&rest body)
   (let ((g (gensym)))
@@ -132,7 +114,6 @@
 (defstruct timing-info
   (calls 0 :type (unsigned-byte 32))
   (total-time 0f0 :type single-float))
-
 
 (defparameter *timing* (make-timing-info))
 
@@ -148,48 +129,19 @@
           (/ (timing-info-calls timing)
              (timing-info-total-time timing))))
 
-(defvar *holding-interaction-lock-already* nil)
-
-(defmacro with-raw-py-lock (python &body body)
-  `(labels ((body () ,@body))
-     (if *holding-interaction-lock-already*
-         (body)
-         (bt:with-recursive-lock-held ((python-raw-py-lock ,python))
-           (body)))))
-
 ;; ============================== RAW FUNCTIONS ================================
 (defun raw-py (cmd-char &rest strings)
   "Intended as an abstraction to RAW-PYEVAL and RAW_PYEXEC.
 Passes strings as they are, without any 'pythonize'ation."
   (python-start-if-not-alive)
   (with-timing
-      (multiple-value-prog1
-          (let* ((python *python*)
-	         (stream (python-input python))
-	         (str (apply #'concatenate 'string strings))
-	         (lock (python-interaction-lock python)))
-            (cp-debug-print "RP: Grabbing raw-py lock ~A~%" lock)
-            (with-raw-py-lock python
-              (cp-debug-print "RP: ~A ~A -> PYTHON~%" cmd-char strings)
-              (cp-debug-print "RP: Grabbing interaction lock ~A~%" lock)
-              (bt:with-recursive-lock-held (lock) ; wait for previous processing to be done
-	        (unless (null (python-interaction-results python))
-		  (format *standard-output* "Unexpected results from python process ~A~%" (python-interaction-results python))
-		  (map nil (lambda (x)
-			     (when (python-error-p x)
-			       (restart-case
-				   (funcall (python-error-thunk x))
-			         (IGNORE ()))))
-		       (python-interaction-results python))
-		  (setf (python-interaction-results python) nil))
-                (setf (python-lispifiers python) *lispifiers*)
-                (setf (python-pythonizers python) *pythonizers*)
-                (write-char cmd-char stream)
-                (stream-write-string str stream)
-                (force-output stream))
-              (cp-debug-print "RP: Release interaction lock and now getting results~%")
-              ;; wait for python output
-              (get-results python)))
+      (prog1
+          (let ((r (make-request *python* cmd-char (apply #'concatenate 'string strings))))
+            (if (python-error-p r)
+                (restart-case
+                    (funcall (python-error-thunk r))
+                  (IGNORE ()))
+                r))
         (add-to-timing (current-time)))))
 
 (defun raw-py-exec/no-return (&rest strings)
@@ -197,18 +149,13 @@ Passes strings as they are, without any 'pythonize'ation."
 control permanently to, say, a GUI main loop in the python process.
 Passes strings as they are, without any 'pythonize'ation."
   (python-start-if-not-alive)
-    (let* ((python *python*)
-	   (stream (python-input python))
-           (str (apply #'concatenate 'string strings)))
-      (bt:with-recursive-lock-held ((python-raw-py-lock *python*))
-        (cp-debug-print "RP: raw-py-exec/no-return ~A~%" strings)
-        (bt:with-recursive-lock-held ((python-interaction-lock python))
-          (cp-debug-print "RP: raw-py-exec/no-return got lock~%")
-          (write-char #\x stream)
-          (stream-write-string str stream)
-          (force-output stream))
-        (cp-debug-print "RP: released interaction lock~%"))
-      (cp-debug-print "RP: released raw-py lock~%")))
+  (let* ((python *python*)
+	 (stream (python-input python))
+         (str (apply #'concatenate 'string strings)))
+    (bt:with-recursive-lock-held ((python-interaction-lock python))
+      (write-char #\x stream)
+      (stream-write-string str stream)
+      (force-output stream))))
 
 (defun raw-pyeval (&rest strings)
   "Calls python eval on the concatenation of strings, as they are, without any
@@ -388,18 +335,19 @@ Note: FUN-NAME is NOT PYTHONIZEd if it is a string.
 
 (defmacro with-remote-objects (&body body)
   "Ensures that all values returned by python functions
-and methods are kept in python, and only handles returned to lisp.
-This is useful if performing operations on large datasets."
+ and methods are kept in python, and only handles returned to lisp.
+ This is useful if performing operations on large datasets."
   `(progn
      (python-start-if-not-alive)
-     ;; Oh oh!  Not allowed
      (let ((stream (python-input *python*)))
-       (write-char #\O stream)        ;; Turn on remote objects
-       (force-output stream)
+       (bt:with-recursive-lock-held ((python-interaction-lock python))
+         (write-char #\O stream)        ;; Turn on remote objects
+         (force-output stream))
        (unwind-protect
             (progn ,@body)
-         (write-char #\o stream)          ;; Turn off remote objects
-         (force-output stream)))))
+         (bt:with-recursive-lock-held ((python-interaction-lock python))
+           (write-char #\o stream)          ;; Turn off remote objects
+           (force-output stream))))))
 
 (defmacro with-remote-objects* (&body body)
   "Ensures that all values returned by python functions

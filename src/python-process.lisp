@@ -13,6 +13,61 @@
 ;; stderr is what python thinks stdout is, so on that we capture
 ;; printed output and misc error output.
 
+;; Request / return-value pairs occur in a stack like format, the most
+;; response return-value response from python is always associated with
+;; the most recently sent request.  We use python-interactions as the
+;; equivalent stack to keep request/return-value responses in order.
+;; That doesn't work either because python may get an EVAL request, be
+;; working on it, the interaction thread goes to sleep as does the caller
+;; and another thread comes in and asks for a request, thus getting
+;; matched.
+
+(defstruct queue-elt
+  (elt nil)
+  (next nil :type (or null queue-elt))
+  (previous nil :type (or null queue-elt)))
+
+(defstruct queue
+  (head nil :type (or null queue-elt))
+  (tail nil :type (or null queue-elt))
+  (waitqueue (bt:make-condition-variable))
+  (lock (bt:make-lock)))
+
+(defun enqueue (queue elt)
+  "push to tail"
+  (bt:with-lock-held ((queue-lock queue))
+    (let* ((tail (queue-tail queue))
+           (new-queue-elt (make-queue-elt :elt elt :next nil :previous tail)))
+      (when (not (queue-head queue)) (setf (queue-head queue) new-queue-elt))
+      (when tail
+        (setf (queue-elt-next (queue-tail queue)) new-queue-elt))
+      (setf (queue-tail queue) new-queue-elt)
+      (bt2:condition-broadcast (queue-waitqueue queue)))))
+
+(defun dequeue (queue)
+  "pop from head"
+  (bt:with-lock-held ((queue-lock queue))
+    (let ((elt (queue-head queue)))
+      (cond
+        (elt
+         (let ((next (queue-elt-next elt)))
+           (setf (queue-head queue) next)
+           (if (eq elt (queue-tail queue))
+               (setf (queue-tail queue) nil)
+               (setf (queue-elt-previous next) nil)))
+         (values (queue-elt-elt elt) t))
+        (t (values nil nil))))))
+
+(defun wait (queue)
+  (bt:with-lock-held ((queue-lock queue))
+    (unless (queue-head queue)
+      (bt:condition-wait (queue-waitqueue queue) (queue-lock queue)))))
+
+(defun peek (queue)
+  (bt:with-lock-held ((queue-lock queue))
+    (let ((elt (queue-head queue)))
+      (when elt
+        (values (queue-elt-elt elt) t)))))
 
 (defstruct python
   (subprocess nil)
@@ -21,17 +76,10 @@
   (output-thread nil :type (or null bt:thread))
   ;; gets written to when in #'with-python-output
   (output-result (make-array 0 :element-type 'character :adjustable t :fill-pointer t) :type vector)
-  ;; This lock deals with reading data back from python
-  (interaction-thread nil :type (or null bt:thread))
-  (interaction-lock (bt:make-recursive-lock) :type bt:lock)
-  (interaction-wait (bt:make-condition-variable :name "stdin stream waitqueue"))
-  (interaction-results nil :type list) ;; for simplicity we lock
-  ;; This is the user facing lock through raw-py.  Having two locks is dangerous
-  ;; one must make sure the interaction-thread NEVER grabs the raw-py lock
-  ;; as the order of locks is RAW-PY then INTERACTION-LOCK.  While the interaction-thread
-  ;; grabs the INTERACTION-LOCK without the RAW-PY lock.  This is the PYTHON-DURING-CALLBACK
-  ;; test
-  (raw-py-lock (bt:make-recursive-lock) :type bt:lock)
+  (interaction-lock (bt:make-recursive-lock "interaction-lock") :type bt:lock) ;; single threads lisp clients
+  (async-callback-thread nil :type (or null bt:thread))
+  (read-thread nil :type (or null bt:thread))
+  (read-queue (make-queue) :type queue)
   (in-with-python-output nil :type boolean)
   (id (incf *python-id*) :type fixnum) ;; unique id
   (freed-python-objects nil :type list) ;; lisp objects that have been gc'ed, free them from python
@@ -41,9 +89,9 @@
   ;; every pyeval*/pycall from delete-numpy-pickle-arrays in reader.lisp
   (lisp-objects nil :type list) ;; lisp objects that python might know about
   (numpy-installed nil :type boolean)
-  (thread-end-signal nil :type boolean) ;; t to gently stop threads
-  (lispifiers nil :type list)
-  (pythonizers nil :type list))
+  (thread-end-signal nil :type boolean)  ;; t to gently stop threads
+  (lispifiers *lispifiers*)
+  (pythonizers *pythonizers*))
 
 (defun subprocess (python/subprocess)
   (if (python-p python/subprocess)
@@ -76,52 +124,21 @@
 
 (defmacro pp-debug-print (&rest rest)
   (declare (ignorable rest))
-  #+debug `(format *standard-output* ,@rest))
-
-(defun get-results& (python)
-  "Block until some results from python.  But cannot block if the
- interaction thread is calling us."
-  (declare (optimize speed safety))
-  (let ((lock (python-interaction-lock python)))
-    (pp-debug-print "GR: Grabbing interaction lock~%")
-    (bt:with-recursive-lock-held (lock)
-      (pp-debug-print "GR: Got interaction lock~%")
-      (loop
-	for is-result = (python-interaction-results python)
-	for result = (pop (python-interaction-results python))
-	until is-result ;; result may be nil!
-	do
-	   (pp-debug-print "GR: waiting on interaction-wait~%")
-           ;; Here we have a race, because we want to give control
-           ;; back to the interaction thread, but someone else may
-           ;; be in raw-py waiting to grab the interaction lock and
-           ;; if they get it, they will get our results.  But this
-           ;; is prevented by the raw-py lock.
-	   (unless (python-alive-p python)
-	     (error 'python-eof-and-dead :python-process (python-subprocess python) :stream nil))
-	   (bt:condition-wait (python-interaction-wait python) lock :timeout 1)
-	finally
-	   (pp-debug-print "GR: Got result ~S~%" result)
-           ;; It's a delayed error
-           (when (python-error-p result)
-             (funcall (python-error-thunk result)))
-           (when (python-interaction-results python)
-             (error (format nil "More results than expected: ~A" (pop (python-interaction-results python)))))
-	   (return result)))))
+  #+debug `(notify-user ,@rest))
 
 (declaim (type (or null python) *python*))
-(defvar *python* nil "Current `python' instance")
+
 (defvar *py4cl-tests* nil "Not needed, but here for backwards compatibility")
   ;; We are loading the whole file into a variable, because we want users to be able
   ;; to use py4cl2 even in a dumped lisp image, without any additional configuration.
-  (defvar *python-code*
-    (alexandria:read-file-into-string
-     (asdf:component-pathname
-      (asdf:find-component :py4cl2 "python-code"))))
+(defparameter *python-code*
+  (alexandria:read-file-into-string
+   (asdf:component-pathname
+    (asdf:find-component :py4cl2 "python-code"))))
 
-  (declaim (type list *additional-init-codes*))
-  (defvar *additional-init-codes* nil
-    "A list of strings each of which should be python code. All the code
+(declaim (type list *additional-init-codes*))
+(defvar *additional-init-codes* nil
+  "A list of strings each of which should be python code. All the code
 will be executed by PYSTART. The code should not contain single-quotation marks.")
 
 (define-condition python-process-startup-error (error)
@@ -174,7 +191,9 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
                        ;; The closest thing is the INTERRUPT test.
                        "\"' <(cat <<\"EOF\""
                        (string #\newline)
-                       *python-code*
+                       *python-code*;; (alexandria:read-file-into-string
+                       ;;  (asdf:component-pathname
+                       ;;   (asdf:find-component :py4cl2 "python-code")))
                        (string #\newline)
                        "EOF"
                        (string #\newline)
@@ -195,71 +214,119 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
   `(let (#+swank (swank:*sldb-quit-restart* ',restart-name))
      ,@body))
 
-(defun interaction-loop
-    (python)
-  "This is the loop that handles all communication back from the
- python process.  We need to be re-entrant because we may call
- callbacks from this thread which are allowed to call back into python
- and can block on get-results.  That includes being able to print
- python objects.  Re-entrance is handled by having calls into
- get-result be difference when in this loop.  We need to handle
- *lispifiers* and *pythonizers*."
-  (let ((*get-results*
-	 (lambda (python)
-	   (let ((result (dispatch-messages (python-output python) (python-input python))))
-	     (if (python-error-p result)
-	       ;; Handle errors
-                 (with-sldb-default-restart ignore
-		   (restart-case
-		       (funcall (python-error-thunk result))
-		     (ignore ())))
-		 result))))
-        (*print-python-object* nil)) ;; avoid deadlocks
-    (declare (special *get-results* *print-python-object*))
-    (loop
-       until (or (python-thread-end-signal python) (not (python-alive-p python)))
-       with output-stream = (python-output python)
-       with input-stream = (python-input python)
-       do
-	 (handler-case
-	     (progn
-	       (pp-debug-print "IT: Waiting for python to say something~%")
-	       (peek-char nil output-stream t)
-	       (pp-debug-print "IT: Got something, grabbing interaction lock~%")
-	       (bt:with-recursive-lock-held ((python-interaction-lock python))
-		 (pp-debug-print "IT: got lock, calling dispatch-message~%")
-                 (let ((*holding-interaction-lock-already* t)
-                       (*lispifiers* (python-lispifiers python))
-                       (*pythonizers* (python-pythonizers python)))
-                   (declare (special *holding-interaction-lock-already*
-                                     *lispifiers* *pythonizers*))
-		   (multiple-value-bind (result result-occurred)
-		       (dispatch-messages output-stream input-stream)
-		     (pp-debug-print "IT: result-occurred ~A~%" result-occurred)
-		     (when (or result result-occurred)
-		       (pp-debug-print "IT: Got result ~S~%" result)
-		       (unless (null (python-interaction-results python))
-		         (format *standard-output* "Unexpected results from python!~%")
-		         (map nil (lambda (x)
-				    (if (functionp x) (funcall x) (format *standard-output* "~A~%" x)))
-			      (python-interaction-results python))
-		         (setf (python-interaction-results python) nil))
-		       (push result (python-interaction-results python))
-		       (pp-debug-print "IT: Results is now ~S, notifying waiters~%" (python-interaction-results python))
-		       (bt:condition-notify (python-interaction-wait python)))))))
-	   (end-of-file (condition)
-	     ;; We end up signalling errors from both this thread and the stderr thread
-	     (format *standard-output* "Python #~A STDOUT got ~A~%" (python-id python) condition)
-	     (labels ((signal-error ()
-			(error (if (python-alive-p python)
-			           'python-eof-but-alive
-			           'python-eof-and-dead)
-			       :python-process (python-subprocess python))))
-	       (bt:with-lock-held ((python-interaction-lock python))
-		 (push
-		  #'signal-error
-		  (python-interaction-results python))
-		 (bt:condition-notify (python-interaction-wait python)))))))))
+(declaim (inline make-response-request))
+(defstruct response-request
+  "A box for the response, and any temporary lispifiers and pythonizers to use
+ during the context of the request/response"
+  (response 'NOT-SATISFIED))
+
+(defstruct write-request
+  (cmd-char #\! :type character)
+  (string "" :type string))
+
+(defun is-valid (response)
+  (not (eq (response-request-response response) 'NOT-SATISFIED)))
+
+(defvar *am-read-thread* nil)
+
+(defun read-from-python-queue (python)
+  (let ((r (dequeue (python-read-queue python))))
+    (if (python-error-p r)
+        (restart-case
+            (funcall (python-error-thunk r))
+          (ignore () nil))
+        r)))
+
+(defvar *request-id* (list 0))
+
+(defun make-request (python cmd-char request-string)
+  ;; For use by Lisp client threads to call into Python
+  ;; Outer lock keeps out other lisp clients
+  (bt:with-recursive-lock-held ((python-interaction-lock python))
+    (let ((stream (python-input python))
+          (request-id (when (eql cmd-char #\e) (sb-ext:atomic-incf (car *request-id*)))))
+      (write-char cmd-char stream)
+      (when (eql cmd-char #\e)
+        (write-string (format nil "~A~%" request-id) stream))
+      (stream-write-string request-string stream)
+      (force-output stream)
+      ;; (notify-user "Requested ~A ID:~A ~A" cmd-char request-id request-string)
+      ;; We will process everything, including random callbacks
+      ;; until we get an answer to our request.  dispatch may
+      ;; recurse inside of itself and end up calling make-request,
+      ;; thus the need for a recursive-lock
+      (loop
+        with response = nil
+        for raw-response = (read-from-python-queue python)
+        do (when raw-response
+             (if (or (not request-id)
+                     (= (python-message-response-id raw-response) -1)
+                     (= (python-message-response-id raw-response) request-id))
+                 (multiple-value-bind (response response-returned)
+                     (dispatch python raw-response)
+                   (when (functionp response)
+                     (funcall response))
+                   (when response-returned
+                     (return-from make-request response)))
+                 (progn
+                   ;; a response from some other request
+                   ;; don't busy wait
+                   (enqueue (python-read-queue python) raw-response)
+                   (sleep 0.001))))))))
+
+(defun notify-user (format-string &rest format-args)
+  (apply 'format *standard-output* format-string format-args))
+
+(defun read-loop (python)
+  "Read messages from python, push them to read-queue"
+  (loop
+    with stream = (python-output python)
+    with queue = (python-read-queue python)
+    until (or (python-thread-end-signal python) (not (python-alive-p python)))
+    :for message-char := (read-char stream)
+    :do
+       (case message-char
+         ((#\e #\r)
+          (let ((response-id (parse-integer (read-line stream))))
+            (let ((msg (make-python-message :cmd-char message-char :string (stream-read-string stream)
+                                           :response-id response-id)))
+              ;;(notify-user "Got ~A" msg)
+              (enqueue queue msg))))
+         ((#\d #\s #\S #\c #\p)
+          (let ((msg (make-python-message :cmd-char message-char :string (stream-read-string stream))))
+            ;;(notify-user "Got ~A" msg)
+            (enqueue queue msg)))
+         (otherwise
+          (enqueue queue (make-python-error :thunk (lambda () (error "Unhandled message type '~d'" message-char))))))))
+
+(defun async-callback-loop (python)
+  "Our job is to wait and see if there are answers"
+  (loop
+    until (or (python-thread-end-signal python) (not (python-alive-p python)))
+    do
+       (bt:with-recursive-lock-held ((python-interaction-lock python))
+         (let ((p (peek (python-read-queue python))))
+           (when (and p (eql (python-message-cmd-char p) #\c))
+             ;;(notify-user "async callback processing ~A" p) 
+             (let ((raw-response (read-from-python-queue python)))
+               (multiple-value-bind (response response-returned)
+                   (dispatch python raw-response)
+                 (when response-returned
+                   (if (python-error-p response)
+                       (restart-case
+                           (funcall (python-error-thunk response))
+                         (ignore ()))
+                       (if (functionp response)
+                           (funcall response)
+                           (restart-case
+                               (error "Unexpected response ~A" response)
+                             (ignore ()))))))))))
+       (sleep 0.05)))
+
+(defstruct python-message
+  (cmd-char #\! :type character)
+  (string "" :type string)
+  (response-id -1 :type fixnum))
 
 (defparameter *pystart-lock* (bt:make-recursive-lock))
 
@@ -305,11 +372,14 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 		(setf command cmd)))
 	    (setf (python-subprocess python) subprocess))
       (unless (not subprocess)
-	(setf (python-interaction-results python) nil) ;; clear any old stuff if restarting
-	(setf (python-interaction-thread python)
+	(setf (python-read-thread python)
 	      (bt:make-thread
-	       (lambda () (interaction-loop python))
-	       :name "interaction-thread"))
+	       (lambda () (read-loop python))
+	       :name "reader-thread"))
+        (setf (python-async-callback-thread python)
+	      (bt:make-thread
+	       (lambda () (async-callback-loop python))
+	       :name "async-callback-loop"))
 	(setf (python-output-thread python)
               (bt:make-thread
                (lambda ()
@@ -330,8 +400,7 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 				      (vector-push-extend char (python-output-result python))))
 				  (progn
 				    (when (> (- (get-universal-time) last-notified-of-spurious-output) 1)
-				      (format *standard-output* "Spurious output from python #~A:~%"
-					      (python-id python))
+				      (notify-user "Spurious output from python #~A:~%" (python-id python))
 				      (setf last-notified-of-spurious-output (get-universal-time)))
                                     (vector-push-extend char *spurious-info*)
 				    (write-char char))))))
@@ -340,7 +409,7 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
 		   (end-of-file (condition)
 		     ;; User will get a debugger from the interaction thread, better to only have one
 		     ;; Messages will probably be garbled as we write from two threads, but better than nothing
-		     (format *standard-output*
+		     (notify-user
 			     "Python #~A: EOF on STDERR ~A received ~@[last message was ~A~]~%"
 			     (python-id python)
 			     condition (unless (emptyp (python-output-result python))
@@ -393,31 +462,32 @@ If still not alive, raises a condition."
 
 (defun pystop (&optional (python *python*))
   "Stop (Quit) the python process PROCESS"
-  (setf (python-thread-end-signal python) t)
-  (when (python-alive-p python)
-    (sleep 0.01) ;; wait for threads to die
-    (ignore-errors (write-char #\q (python-input python))) ;; can't be sure they aren't still waiting for output
-    (ignore-errors (finish-output (python-input python)))
-    (loop repeat 1000
-	  until (not (python-alive-p python)))
-    (sleep 0.01)) ;; wait for python to die before axing it
-  (when (python-alive-p python)
-    (ignore-errors (uiop:terminate-process (subprocess python)))
-    (ignore-errors (uiop:terminate-process (subprocess python) :urgent t)))
-  ;; We no longer care about any objects that needed to be freed in python
-  (setf (python-freed-python-objects python) nil)
-  (delete-numpy-pickle-arrays python)
-  (if (bt:thread-alive-p (python-output-thread python)) (bt:destroy-thread (python-output-thread python)))
-  (if (bt:thread-alive-p (python-interaction-thread python)) (bt:destroy-thread (python-interaction-thread python)))
-  (setf (python-thread-end-signal python) nil)
-  (clear-lisp-objects python)
-  (setf (fill-pointer (python-output-result python)) 0)
-  (setf (python-interaction-results python) nil)
-  (setf (python-output-lock python) (bt:make-recursive-lock))
-  (setf (python-interaction-lock python) (bt:make-recursive-lock))
-  (setf (python-raw-py-lock python) (bt:make-recursive-lock))
-  (setf (python-interaction-wait python) (bt:make-condition-variable :name "stdin stream waitqueue"))
-  (setf (python-subprocess python) nil))
+  (when python
+    (setf (python-thread-end-signal python) t)
+    (when (python-alive-p python)
+      (sleep 0.01)                                         ;; wait for threads to die
+      (ignore-errors (write-char #\q (python-input python))) ;; can't be sure they aren't still waiting for output
+      (ignore-errors (finish-output (python-input python)))
+      (loop repeat 1000
+	    until (not (python-alive-p python)))
+      (sleep 0.01)) ;; wait for python to die before axing it
+    (when (python-alive-p python)
+      (ignore-errors (uiop:terminate-process (subprocess python)))
+      (ignore-errors (uiop:terminate-process (subprocess python) :urgent t)))
+    ;; We no longer care about any objects that needed to be freed in python
+    (setf (python-freed-python-objects python) nil)
+    (delete-numpy-pickle-arrays python)
+    (if (bt:thread-alive-p (python-output-thread python)) (bt:destroy-thread (python-output-thread python)))
+    (if (bt:thread-alive-p (python-read-thread python)) (bt:destroy-thread (python-read-thread python)))
+    (if (bt:thread-alive-p (python-async-callback-thread python))
+        (bt:destroy-thread (python-async-callback-thread python)))
+    (setf (python-thread-end-signal python) nil)
+    (clear-lisp-objects python)
+    (setf (fill-pointer (python-output-result python)) 0)
+    (setf (python-read-queue python) (make-queue))
+    (setf (python-output-lock python) (bt:make-recursive-lock))
+    (setf (python-interaction-lock python) (bt:make-lock))
+    (setf (python-subprocess python) nil)))
 
 (defun pyinterrupt (&optional (python *python*))
   "Issues a SIGINT command to the python process"

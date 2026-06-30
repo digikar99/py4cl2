@@ -1,6 +1,6 @@
 (in-package :py4cl2)
 
-(defvar *python* nil "Current active python instance")
+(defvar *python* nil "Current `python' instance")
 
 (defvar *config* () "Configuration variable used to store configuration values for PY4CL2.
 This variable should be manipulated using CONFIG-VAR and (SETF CONFIG-VAR).")

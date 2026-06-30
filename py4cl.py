@@ -381,6 +381,11 @@ def generator(function, stop_value):
 
 ##################################################################
 
+def recv_string_with_id ():
+	id = int(sys.stdin.readline())
+	length = int(sys.stdin.readline())
+	return (sys.stdin.read(length), id, length)
+
 def recv_string():
 	"""
 	Get a string from the input stream
@@ -396,12 +401,14 @@ def recv_value():
 	return eval(recv_string(), eval_globals)
 
 send_value_lock = threading.RLock()
-def send_value(cmd_type, value):
+def send_value(cmd_type, value, response_id=None):
 	"""
 	Send a value to stdout as a string, with length of string first
 	"""
 	with send_value_lock:
 		return_stream.write(cmd_type)
+		if response_id:
+			print(response_id, file = return_stream)
 		try:
 			# if type(value) == str and return_values > 0:
 			# value_str = value # to handle stringified-errors along with remote-objects
@@ -416,17 +423,16 @@ def send_value(cmd_type, value):
 		return_stream.write(value_str)
 		return_stream.flush()
 
-def return_value(value):
+def return_value(value, response_id=-1):
 	"""
 	Return value to lisp process, by writing to return_stream
 	"""
 	if isinstance(value, Exception):
 		return return_error(value)
-	# return_stream.flush() # TODO not sure
-	send_value("r", value)
+	send_value("r", value, response_id=response_id)
 
-def return_error(error):
-	send_value("e", error)
+def return_error(error, response_id=-1):
+	send_value("e", error, response_id=response_id)
 
 def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
@@ -454,33 +460,35 @@ def try_process_message(blocking=True):
 	busy_loop = 100
 	while True:
 		try:
+			response_id = -1
 			output_stream.flush()
 			if not blocking:
 				os.set_blocking(sys.stdin.fileno(), False)
 			# Read command type
 			cmd_type = sys.stdin.read(1)
 			if cmd_type == "":
-				if busy_loop > 0 and not blocking:
-					busy_loop = busy_loop - 1
-					continue;
 				if not blocking:
-					os.set_blocking(sys.stdin.fileno(), True)
-				return None
+					if busy_loop > 0:
+						busy_loop = busy_loop - 1
+						continue;
+					else:
+						os.set_blocking(sys.stdin.fileno(), True)
+					return None
+				else:
+					continue; # should not happen
 			busy_loop = 100
 			# It is possible that python would have finished sending the data to CL
 			# but CL would still not have finished processing. We will receive further
 			# instructions only after CL has finished processing, and therefore we can delete
-			# the arrays. (TODO: But how does this happen with callbacks?)
+			# the arrays.
 			if numpy_is_installed: delete_numpy_pickle_arrays()
 
 			if cmd_type == "e":  # Evaluate an expression
-				expr = recv_string()
-				# if expr not in cache:
-				# print("Adding " + expr + " to cache")
-				# cache[expr] = eval("lambda : " + expr, eval_globals)
-				# result = cache[expr]()
-				result = eval(expr, eval_globals)
-				return_value(result)
+				(string, id, length) = recv_string_with_id()
+				# print(f"Got an E with ID {id} length {length} string {string}")
+				response_id = id
+				result = eval(string, eval_globals)
+				return_value(result, id)
 			elif cmd_type == "x": # Execute a statement
 				exec(recv_string(), eval_globals)
 				return_value(None)
@@ -498,7 +506,7 @@ def try_process_message(blocking=True):
 			# output_stream.write("Python interrupted!\n")
 			return_value(None)
 		except Exception as e:
-			return_error(e)
+			return_error(e, response_id=response_id)
 
 # Store for python objects which cannot be translated to Lisp objects
 python_objects = {}

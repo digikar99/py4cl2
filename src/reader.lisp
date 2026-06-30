@@ -83,6 +83,14 @@ Returns the string or nil on error
     (read-sequence seq stream)
     seq))
 
+(defun read-value (string)
+  (multiple-value-bind (value count)
+      (read-from-string string)
+    ;; Check if all characters were used
+    (unless (eql count (length string))
+      (error (concatenate 'string "unread characters in reading string \"" string "\"")))
+    value))
+
 (defun stream-read-value (stream)
   "Get a value from a stream
 Currently works by reading a string then using read-from-string
