@@ -64,10 +64,15 @@
       (bt:condition-wait (queue-waitqueue queue) (queue-lock queue)))))
 
 (defun peek (queue)
-  (bt:with-lock-held ((queue-lock queue))
-    (let ((elt (queue-head queue)))
-      (when elt
-        (values (queue-elt-elt elt) t)))))
+  (let ((lock (queue-lock queue)))
+    (bt:with-lock-held (lock)
+      (tagbody
+       :try
+         (let ((elt (queue-head queue)))
+           (when elt
+             (return-from peek (values (queue-elt-elt elt) t)))
+           (bt:condition-wait (queue-waitqueue queue) lock)
+           (go :try))))))
 
 (defstruct python
   (subprocess nil)
@@ -309,24 +314,24 @@ will be executed by PYSTART. The code should not contain single-quotation marks.
   (loop
     until (or (python-thread-end-signal python) (not (python-alive-p python)))
     do
-       (bt:with-recursive-lock-held ((python-interaction-lock python))
-         (let ((p (peek (python-read-queue python))))
-           (when (and p (member (python-message-cmd-char p) '(#\c #\d)))
-             ;;(notify-user "async callback processing ~A" p) 
+       (let ((p (peek (python-read-queue python))))
+         (when (and p (member (python-message-cmd-char p) '(#\c #\d)))
+           (bt:with-recursive-lock-held ((python-interaction-lock python))
+             ;;(notify-user "async callback processing ~A" p)
              (let ((raw-response (read-from-python-queue python)))
-               (multiple-value-bind (response response-returned)
-                   (dispatch python raw-response)
-                 (when response-returned
-                   (if (python-error-p response)
-                       (restart-case
-                           (funcall (python-error-thunk response))
-                         (ignore ()))
-                       (if (functionp response)
-                           (funcall response)
-                           (restart-case
-                               (error "Unexpected response ~A" response)
-                             (ignore ()))))))))))
-       (sleep 0.05)))
+               (when raw-response
+                 (multiple-value-bind (response response-returned)
+                     (dispatch python raw-response)
+                   (when response-returned
+                     (if (python-error-p response)
+                         (restart-case
+                             (funcall (python-error-thunk response))
+                           (ignore ()))
+                         (if (functionp response)
+                             (funcall response)
+                             (restart-case
+                                 (error "Unexpected response ~A" response)
+                               (ignore ())))))))))))))
 
 (defparameter *pystart-lock* (bt:make-recursive-lock))
 
