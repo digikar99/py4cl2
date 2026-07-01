@@ -297,7 +297,7 @@ if numpy_is_installed: #########################################################
 			NUMPY_PICKLE_INDEX += 1
 			with open(numpy_pickle_location, "wb") as f:
 				numpy.save(f, obj, allow_pickle = True)
-			array = "#.(progn (numpy-file-format:load-array \"" + numpy_pickle_location + "\") (uiop:delete-file-if-exists \"" + numpy_pickle_location + "\")"
+			array = "#.(py4cl2::read-and-delete-numpy-file \"" + numpy_pickle_location + "\")"
 			return array
 		if obj.ndim == 0:
 			# Convert to scalar then lispify

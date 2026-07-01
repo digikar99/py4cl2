@@ -46,6 +46,11 @@ try:
 except:
   pass")))))
 
+(defun read-and-delete-numpy-file (filename)
+  (prog1
+      (numpy-file-format:load-array filename)
+    (uiop:delete-file-if-exists filename)))
+
 (defun delete-numpy-pickle-arrays (&optional (python *python*))
   "Delete pickled arrays, to free space."
   (loop
