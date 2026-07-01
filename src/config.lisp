@@ -1,5 +1,7 @@
 (in-package :py4cl2)
 
+(defvar *python* nil "Current `python' instance")
+
 (defvar *config* () "Configuration variable used to store configuration values for PY4CL2.
 This variable should be manipulated using CONFIG-VAR and (SETF CONFIG-VAR).")
 ;; Refer initialize function to note which variables are included under *config*
@@ -45,7 +47,12 @@ For example,
   ; 5        ; lispifier uncalled for non-VECTOR
   5
 
-NOTE: This is a new feature and hence unstable; recommended to avoid in production code."
+NOTE: This is a new feature and hence unstable; recommended to avoid in production code.
+
+WARNING: This applies to any operations that occur within this
+context, but ALSO to any asynchronous callbacks that may occur if you
+are running, say, a GUI in python.  This makes it fundamentally unsafe
+as implemented."
   `(let ((*lispifiers* (list* ,@(loop :for (type lispifier) :in overriding-lispifiers
                                       :collect `(cons ',type ,lispifier))
                               *lispifiers*)))
@@ -69,7 +76,12 @@ For example,
   ; 5        ; pythonizer uncalled for non-VECTOR
   5
 
-NOTE: This is a new feature and hence unstable; recommended to avoid in production code."
+NOTE: This is a new feature and hence unstable; recommended to avoid in production code.
+
+WARNING: This applies to any operations that occur within this
+context, but ALSO to any asynchronous callbacks that may occur if you
+are running, say, a GUI in python.  This makes it fundamentally unsafe
+as implemented."
   `(let ((*pythonizers* (list* ,@(loop :for (type pythonizer) :in overriding-pythonizers
                                        :collect `(cons ',type ,pythonizer))
                                *pythonizers*)))
@@ -83,8 +95,8 @@ NOTE: This is a new feature and hence unstable; recommended to avoid in producti
   ;; This is called from py4cl.py
   (loop :for (type . lispifier) :in *lispifiers*
         :if (typep object type)
-          :do (return-from customize (funcall lispifier object)))
-  object)
+          :do (return (funcall lispifier object))
+        :finally (return object)))
 
 (defun %pythonize (object)
   "A wrapper around PYTHONIZE to take custom *PYTHONIZERS* into account."
@@ -189,7 +201,7 @@ instructions on creating a ram-disk on linux-based systems.
       (format t "~&Call (SAVE-CONFIG) if you'd like to persist this value for PYCMD.
 You will need to (PYSTOP) and (PYSTART) to use the new binary.~%")
       (save-config))
-  (when (python-alive-p) (pycall "_py4cl_load_config")))
+  (when (python-alive-p *python*) (pycall "_py4cl_load_config")))
 
 (defun py-cd (path)
   (pyexec "import os")

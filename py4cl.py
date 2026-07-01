@@ -18,6 +18,7 @@ import os
 import signal
 import traceback
 import threading
+import time
 
 numpy_is_installed = False
 try:
@@ -117,9 +118,7 @@ class LispCallbackObject (object):
 			finally:
 				return_values = old_return_values
 
-			# Wait for a value to be returned.
-			# Note that the lisp function may call python before returning
-			return message_dispatch_loop()
+			return try_process_message(blocking=True)
 
 
 class UnknownLispObject (object):
@@ -160,7 +159,7 @@ class UnknownLispObject (object):
 			sys.stdout = output_stream
 
 		# Wait for the result
-		return message_dispatch_loop()
+		return try_process_message(blocking=True) #message_dispatch_loop()
 
 	def __setattr__(self, attr, value):
 		if self.__during_init:
@@ -171,7 +170,7 @@ class UnknownLispObject (object):
 		finally:
 			sys.stdout = output_stream
 		# Wait until finished, to syncronise
-		return message_dispatch_loop()
+		return try_process_message(blocking=True) # message_dispatch_loop()
 
 python_to_lisp_type = {
 	bool       : "BOOLEAN",
@@ -259,16 +258,8 @@ if numpy_is_installed: #########################################################
 
 	def load_pickled_ndarray(filename):
 		arr = numpy.load(filename, allow_pickle = True)
+		os.remove(filename)
 		return arr
-
-	def delete_numpy_pickle_arrays():
-		global NUMPY_PICKLE_INDEX
-		while NUMPY_PICKLE_INDEX:
-			NUMPY_PICKLE_INDEX -= 1
-			numpy_pickle_location = config["numpyPickleLocation"] \
-				+ ".from." + str(NUMPY_PICKLE_INDEX)
-			if os.path.exists(numpy_pickle_location):
-				os.remove(numpy_pickle_location)
 
 	numpy_cl_type = {
 		numpy.dtype("int64"): "(cl:quote (cl:signed-byte 64))",
@@ -305,7 +296,7 @@ if numpy_is_installed: #########################################################
 			NUMPY_PICKLE_INDEX += 1
 			with open(numpy_pickle_location, "wb") as f:
 				numpy.save(f, obj, allow_pickle = True)
-			array = "#.(numpy-file-format:load-array \"" + numpy_pickle_location + "\")"
+			array = "#.(py4cl2::read-and-delete-numpy-file \"" + numpy_pickle_location + "\")"
 			return array
 		if obj.ndim == 0:
 			# Convert to scalar then lispify
@@ -381,6 +372,11 @@ def generator(function, stop_value):
 
 ##################################################################
 
+def recv_string_with_id ():
+	id = int(sys.stdin.readline())
+	length = int(sys.stdin.readline())
+	return (sys.stdin.read(length), id, length)
+
 def recv_string():
 	"""
 	Get a string from the input stream
@@ -396,12 +392,14 @@ def recv_value():
 	return eval(recv_string(), eval_globals)
 
 send_value_lock = threading.RLock()
-def send_value(cmd_type, value):
+def send_value(cmd_type, value, response_id=None):
 	"""
 	Send a value to stdout as a string, with length of string first
 	"""
 	with send_value_lock:
 		return_stream.write(cmd_type)
+		if response_id:
+			print(response_id, file = return_stream)
 		try:
 			# if type(value) == str and return_values > 0:
 			# value_str = value # to handle stringified-errors along with remote-objects
@@ -416,17 +414,16 @@ def send_value(cmd_type, value):
 		return_stream.write(value_str)
 		return_stream.flush()
 
-def return_value(value):
+def return_value(value, response_id=-1):
 	"""
 	Return value to lisp process, by writing to return_stream
 	"""
 	if isinstance(value, Exception):
 		return return_error(value)
-	# return_stream.flush() # TODO not sure
-	send_value("r", value)
+	send_value("r", value, response_id=response_id)
 
-def return_error(error):
-	send_value("e", error)
+def return_error(error, response_id=-1):
+	send_value("e", error, response_id=response_id)
 
 def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
@@ -436,41 +433,55 @@ def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	return str(value)[1:].replace("-", "_")
 
 def message_dispatch_loop():
+	while True:
+		try_process_message(blocking=True)
+
+def try_process_message(blocking=True):
 	"""
 	Wait for a message, dispatch on the type of message.
 	Message types are determined by the first character:
 
 	e  Evaluate an expression (expects string)
 	x  Execute a statement (expects string)
+	O  Enable handles
+	o  Disable handles
 	q  Quit
 	"""
 	global return_values  # Controls whether values or handles are returned
+	busy_loop = 100
 	while True:
 		try:
+			response_id = -1
 			output_stream.flush()
+			if not blocking:
+				os.set_blocking(sys.stdin.fileno(), False)
 			# Read command type
 			cmd_type = sys.stdin.read(1)
-			# It is possible that python would have finished sending the data to CL
-			# but CL would still not have finished processing. We will receive further
-			# instructions only after CL has finished processing, and therefore we can delete
-			# the arrays. (TODO: But how does this happen with callbacks?)
-			if numpy_is_installed: delete_numpy_pickle_arrays()
+			if cmd_type == "":
+				if not blocking:
+					if busy_loop > 0:
+						busy_loop = busy_loop - 1
+						continue;
+					else:
+						os.set_blocking(sys.stdin.fileno(), True)
+					return None
+				else:
+					continue; # should not happen
+			busy_loop = 100
 
 			if cmd_type == "e":  # Evaluate an expression
-				expr = recv_string()
-				# if expr not in cache:
-				# print("Adding " + expr + " to cache")
-				# cache[expr] = eval("lambda : " + expr, eval_globals)
-				# result = cache[expr]()
-				result = eval(expr, eval_globals)
-				return_value(result)
+				(string, id, length) = recv_string_with_id()
+				# print(f"Got an E with ID {id} length {length} string {string}")
+				response_id = id
+				result = eval(string, eval_globals)
+				return_value(result, id)
 			elif cmd_type == "x": # Execute a statement
 				exec(recv_string(), eval_globals)
 				return_value(None)
 			elif cmd_type == "q":
 				exit(0)
 			elif cmd_type == "r": # return value from lisp function
-				return recv_value()
+				return recv_value() # break out of the while loop
 			elif cmd_type == "O":  # Return only handles
 				return_values += 1
 			elif cmd_type == "o":  # Return values when possible (default)
@@ -481,12 +492,14 @@ def message_dispatch_loop():
 			# output_stream.write("Python interrupted!\n")
 			return_value(None)
 		except Exception as e:
-			return_error(e)
+			return_error(e, response_id=response_id)
 
 # Store for python objects which cannot be translated to Lisp objects
 python_objects = {}
 python_handle = itertools.count(0)
 
+# For user to use to give time to our dispatch loop
+eval_globals["try_process_message"] = try_process_message
 # Make callback function accessible to evaluation
 eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
 eval_globals["_py4cl_Symbol"] = Symbol
