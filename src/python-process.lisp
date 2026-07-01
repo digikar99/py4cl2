@@ -91,7 +91,6 @@
   (numpy-pickle-index 0 :type fixnum)
   ;; "Used for transferring multiple numpy-pickled arrays in one pyeval/exec/etc")
   ;; this is incremented by pythonize and reset to 0 at the beginning of
-  ;; every pyeval*/pycall from delete-numpy-pickle-arrays in reader.lisp
   (lisp-objects nil :type list) ;; lisp objects that python might know about
   (numpy-installed nil :type boolean)
   (thread-end-signal nil :type boolean)  ;; t to gently stop threads
@@ -481,7 +480,6 @@ If still not alive, raises a condition."
       (ignore-errors (uiop:terminate-process (subprocess python) :urgent t)))
     ;; We no longer care about any objects that needed to be freed in python
     (setf (python-freed-python-objects python) nil)
-    (delete-numpy-pickle-arrays python)
     (if (bt:thread-alive-p (python-output-thread python)) (bt:destroy-thread (python-output-thread python)))
     (if (bt:thread-alive-p (python-read-thread python)) (bt:destroy-thread (python-read-thread python)))
     (if (bt:thread-alive-p (python-async-callback-thread python))

@@ -201,14 +201,12 @@ Eg.
   25"
     (python-start-if-not-alive)
     (delete-freed-python-objects) ; delete before pythonizing
-    (delete-numpy-pickle-arrays)
     (apply #'raw-pyeval (mapcar #'pythonize-if-needed args)))
 
   (defun pyexec (&rest args)
     "Calls python exec on args; PYTHONIZEs arg if it satisfies PYTHONIZEP."
     (python-start-if-not-alive)
     (delete-freed-python-objects) ; delete before pythonizing
-    (delete-numpy-pickle-arrays)
     (apply #'raw-pyexec (mapcar #'pythonize-if-needed args)))
 
   ;; One argument for the name (setf pyeval) is that it sets the "place" returned

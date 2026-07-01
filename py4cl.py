@@ -258,16 +258,8 @@ if numpy_is_installed: #########################################################
 
 	def load_pickled_ndarray(filename):
 		arr = numpy.load(filename, allow_pickle = True)
+		os.remove(filename)
 		return arr
-
-	def delete_numpy_pickle_arrays():
-		global NUMPY_PICKLE_INDEX
-		while NUMPY_PICKLE_INDEX:
-			NUMPY_PICKLE_INDEX -= 1
-			numpy_pickle_location = config["numpyPickleLocation"] \
-				+ ".from." + str(NUMPY_PICKLE_INDEX)
-			if os.path.exists(numpy_pickle_location):
-				os.remove(numpy_pickle_location)
 
 	numpy_cl_type = {
 		numpy.dtype("int64"): "(cl:quote (cl:signed-byte 64))",
@@ -305,7 +297,7 @@ if numpy_is_installed: #########################################################
 			NUMPY_PICKLE_INDEX += 1
 			with open(numpy_pickle_location, "wb") as f:
 				numpy.save(f, obj, allow_pickle = True)
-			array = "#.(numpy-file-format:load-array \"" + numpy_pickle_location + "\")"
+			array = "#.(progn (numpy-file-format:load-array \"" + numpy_pickle_location + "\") (uiop:delete-file-if-exists \"" + numpy_pickle_location + "\")"
 			return array
 		if obj.ndim == 0:
 			# Convert to scalar then lispify
@@ -477,11 +469,6 @@ def try_process_message(blocking=True):
 				else:
 					continue; # should not happen
 			busy_loop = 100
-			# It is possible that python would have finished sending the data to CL
-			# but CL would still not have finished processing. We will receive further
-			# instructions only after CL has finished processing, and therefore we can delete
-			# the arrays.
-			if numpy_is_installed: delete_numpy_pickle_arrays()
 
 			if cmd_type == "e":  # Evaluate an expression
 				(string, id, length) = recv_string_with_id()
