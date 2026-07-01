@@ -138,7 +138,7 @@ Is numpy installed on python side?"
                                           (config-var 'numpy-pickle-location)
 					  "-" (write-to-string (python-id *python*))
                                           ".to." (write-to-string (python-numpy-pickle-index *python*)))))
-               (incf (python-numpy-pickle-index *python*))
+               (sb-ext:atomic-incf (python-numpy-pickle-index *python*))
                (numpy-file-format:store-array obj filename)
                (return-from pythonize
                  (concatenate 'string "_py4cl_load_pickled_ndarray('"

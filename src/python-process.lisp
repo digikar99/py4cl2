@@ -88,7 +88,7 @@
   (in-with-python-output nil :type boolean)
   (id (incf *python-id*) :type fixnum) ;; unique id
   (freed-python-objects nil :type list) ;; lisp objects that have been gc'ed, free them from python
-  (numpy-pickle-index 0 :type fixnum)
+  (numpy-pickle-index 0 :type (unsigned-byte 64))
   ;; "Used for transferring multiple numpy-pickled arrays in one pyeval/exec/etc")
   ;; this is incremented by pythonize and reset to 0 at the beginning of
   (lisp-objects nil :type list) ;; lisp objects that python might know about
