@@ -1,4 +1,4 @@
->This is a fork of bendudson/py4cl.
+>This is a fork of [digikar99/py4cl2](https://github.com/digikar99/py4cl2)
 
 # Github Pages
 
